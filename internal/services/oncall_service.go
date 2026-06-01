@@ -1,7 +1,10 @@
 package services
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -16,10 +19,14 @@ type OnCallEvent struct {
 
 type OnCallService struct {
 	oncall repositories.OnCallRepository
+	ai     *AIStreamClient
 }
 
-func NewOnCallService(oncall repositories.OnCallRepository) *OnCallService {
-	return &OnCallService{oncall: oncall}
+func NewOnCallService(oncall repositories.OnCallRepository, aiServiceBaseURL string) *OnCallService {
+	return &OnCallService{
+		oncall: oncall,
+		ai:     NewAIStreamClient(aiServiceBaseURL),
+	}
 }
 
 func (s *OnCallService) CreateSession(user *models.User, title string) (*models.OnCallSession, *AppError) {
@@ -91,6 +98,50 @@ func (s *OnCallService) StreamSessionReply(user *models.User, sessionID string, 
 	return events, nil
 }
 
+func (s *OnCallService) StreamAIChat(ctx context.Context, message string, conversationID string, emit func(OnCallEvent) error) error {
+	return s.streamAI(ctx, message, conversationID, emit, convertAIEventToDocEvent)
+}
+
+func (s *OnCallService) StreamOnCallQuery(ctx context.Context, message string, emit func(OnCallEvent) error) error {
+	return s.streamAI(ctx, message, "", emit, convertAIEventToClientEvent)
+}
+
+func (s *OnCallService) StreamOnCallMessage(ctx context.Context, user *models.User, sessionID string, messageID string, emit func(OnCallEvent) error) *AppError {
+	message, err := s.oncall.FindMessage(user.ID, sessionID, messageID)
+	if errors.Is(err, repositories.ErrNotFound) {
+		return NewAppError(http.StatusNotFound, "RESOURCE_NOT_FOUND", "AI 会话或消息不存在")
+	}
+	if err != nil {
+		return NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "生成 AI 回复失败")
+	}
+
+	var assistantBuilder strings.Builder
+	var assistantMessageID string
+	streamErr := s.streamAI(ctx, message.Content, sessionID, func(event OnCallEvent) error {
+		if event.Event == "delta" {
+			assistantBuilder.WriteString(readJSONText(event.Data, "text"))
+		}
+		if event.Event == "done" {
+			assistant, err := s.oncall.AddMessage(user.ID, sessionID, "assistant", assistantBuilder.String(), "text")
+			if err == nil {
+				assistantMessageID = assistant.MessageID
+				event.Data = `{"messageId":"` + jsonEscape(assistantMessageID) + `"}`
+			}
+		}
+		if err := emit(event); err != nil {
+			return err
+		}
+		return nil
+	}, convertAIEventToClientEvent)
+	if streamErr != nil {
+		return NewAppError(http.StatusBadGateway, "AI_SERVICE_ERROR", "AI 服务调用失败: "+streamErr.Error())
+	}
+	if assistantMessageID == "" && assistantBuilder.Len() > 0 {
+		_, _ = s.oncall.AddMessage(user.ID, sessionID, "assistant", assistantBuilder.String(), "text")
+	}
+	return nil
+}
+
 func (s *OnCallService) MockReplyEvents(message string) []OnCallEvent {
 	if strings.TrimSpace(message) == "" {
 		message = "如何接入一个业务 Tab？"
@@ -106,4 +157,141 @@ func (s *OnCallService) MockReplyEvents(message string) []OnCallEvent {
 	}
 
 	return append(events, OnCallEvent{Event: "done", Data: `{}`})
+}
+
+func (s *OnCallService) streamAI(ctx context.Context, message string, conversationID string, emit func(OnCallEvent) error, convert func(AIChatEvent) (OnCallEvent, bool)) error {
+	if strings.TrimSpace(message) == "" {
+		message = "如何接入一个业务 Tab？"
+	}
+
+	if !s.ai.Available() {
+		return emitConvertedMockEvents(message, emit, convert)
+	}
+
+	return s.ai.Stream(ctx, AIChatRequest{
+		Message:        message,
+		ConversationID: conversationID,
+	}, func(event AIChatEvent) error {
+		converted, ok := convert(event)
+		if !ok {
+			return nil
+		}
+		return emit(converted)
+	})
+}
+
+func emitConvertedMockEvents(message string, emit func(OnCallEvent) error, convert func(AIChatEvent) (OnCallEvent, bool)) error {
+	events := []AIChatEvent{
+		{Event: "message", Data: map[string]any{"type": "intent", "intent": "PROTOCOL_QA"}},
+		{Event: "message", Data: map[string]any{"type": "tool", "tool": "search"}},
+		{Event: "message", Data: map[string]any{"type": "tool", "tool": "read"}},
+	}
+	content := "我现在按 AI OnCall 协议返回流式回答。你可以询问 Tab 接入、协议配置或错误日志。"
+	if strings.Contains(strings.ToLower(message), "tab") {
+		content = "接入业务 Tab 时，先定义 TabManifest，再由容器根据权限和入口类型加载对应页面。"
+	}
+	events = append(events,
+		AIChatEvent{Event: "message", Data: map[string]any{"type": "content", "delta": content}},
+		AIChatEvent{Event: "message", Data: map[string]any{"type": "done", "messageId": "mock-ai-message"}},
+	)
+	for _, event := range events {
+		converted, ok := convert(event)
+		if !ok {
+			continue
+		}
+		if err := emit(converted); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convertAIEventToDocEvent(event AIChatEvent) (OnCallEvent, bool) {
+	data, err := json.Marshal(event.Data)
+	if err != nil {
+		return OnCallEvent{}, false
+	}
+	return OnCallEvent{Event: "message", Data: string(data)}, true
+}
+
+func convertAIEventToClientEvent(event AIChatEvent) (OnCallEvent, bool) {
+	eventType := readMapString(event.Data, "type")
+	switch eventType {
+	case "content":
+		return OnCallEvent{
+			Event: "delta",
+			Data:  `{"text":"` + jsonEscape(readMapString(event.Data, "delta")) + `"}`,
+		}, true
+	case "tool":
+		tool := readMapString(event.Data, "tool")
+		return OnCallEvent{
+			Event: "tool",
+			Data: fmt.Sprintf(
+				`{"name":"%s","status":"running","summary":"%s"}`,
+				jsonEscape(tool),
+				jsonEscape(toolSummary(tool)),
+			),
+		}, true
+	case "done":
+		messageID := readMapString(event.Data, "messageId")
+		return OnCallEvent{
+			Event: "done",
+			Data:  `{"messageId":"` + jsonEscape(messageID) + `"}`,
+		}, true
+	case "error":
+		code := readMapString(event.Data, "code")
+		if code == "" {
+			code = "AI_SERVICE_ERROR"
+		}
+		message := readMapString(event.Data, "delta")
+		return OnCallEvent{
+			Event: "error",
+			Data:  `{"code":"` + jsonEscape(code) + `","message":"` + jsonEscape(message) + `"}`,
+		}, true
+	default:
+		return OnCallEvent{}, false
+	}
+}
+
+func readMapString(data map[string]any, key string) string {
+	value, ok := data[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return fmt.Sprint(value)
+}
+
+func readJSONText(data string, key string) string {
+	var obj map[string]string
+	if err := json.Unmarshal([]byte(data), &obj); err != nil {
+		return ""
+	}
+	return obj[key]
+}
+
+func jsonEscape(value string) string {
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	quoted := string(bytes)
+	if len(quoted) < 2 {
+		return ""
+	}
+	return quoted[1 : len(quoted)-1]
+}
+
+func toolSummary(tool string) string {
+	switch tool {
+	case "search":
+		return "正在检索相关资料..."
+	case "read":
+		return "正在阅读协议文档..."
+	case "analyze":
+		return "正在分析问题..."
+	case "generate":
+		return "正在生成代码..."
+	default:
+		return "正在调用 AI 工具..."
+	}
 }

@@ -336,6 +336,26 @@ func TestOnCallStreamReturnsSSE(t *testing.T) {
 	}
 }
 
+func TestAIChatStreamReturnsDocumentProtocolSSE(t *testing.T) {
+	router := setupTestRouter()
+
+	recorder := performRequest(router, http.MethodPost, "/api/chat/stream", "", `{"message":"如何注册 Tab？","conversationId":"test-001"}`)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if contentType := recorder.Header().Get("Content-Type"); !strings.Contains(contentType, "text/event-stream") {
+		t.Fatalf("expected event-stream content type, got %q", contentType)
+	}
+
+	body := recorder.Body.String()
+	for _, want := range []string{"event: message", `"type":"tool"`, `"type":"content"`, `"type":"done"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected SSE body to contain %q, got %s", want, body)
+		}
+	}
+}
+
 func TestInvalidJSONReturnsBadRequest(t *testing.T) {
 	router := setupTestRouter()
 

@@ -17,9 +17,10 @@ func main() {
 	router := gin.Default()
 	repos := repositories.NewMemoryRepositorySet()
 	runtimeStatus := routes.RuntimeStatus{
-		AppMode:         cfg.AppMode,
-		DatabaseEnabled: false,
-		DatabaseType:    "memory",
+		AppMode:          cfg.AppMode,
+		DatabaseEnabled:  false,
+		DatabaseType:     "memory",
+		AIServiceBaseURL: cfg.AIServiceBaseURL,
 	}
 	if cfg.DatabaseURL == "" {
 		log.Print("OpenTab server DATABASE_URL is empty")

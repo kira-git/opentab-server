@@ -8,6 +8,7 @@ APP_MODE="${APP_MODE:-postgres}"
 DATABASE_URL="${DATABASE_URL:-postgres://opentab:opentab123@localhost:5432/opentab?sslmode=disable}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8080}"
+AI_SERVICE_BASE_URL="${AI_SERVICE_BASE_URL:-http://127.0.0.1:8081}"
 
 echo "Pulling latest code..."
 git pull
@@ -28,6 +29,7 @@ APP_MODE="${APP_MODE}" \
 DATABASE_URL="${DATABASE_URL}" \
 HOST="${HOST}" \
 PORT="${PORT}" \
+AI_SERVICE_BASE_URL="${AI_SERVICE_BASE_URL}" \
 nohup go run ./cmd/server > server.out.log 2> server.err.log &
 
 sleep 2

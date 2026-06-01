@@ -36,6 +36,7 @@ GET  /health
 POST /auth/login
 POST /auth/logout
 GET  /me
+POST /api/chat/stream
 GET  /tabs
 GET  /tabs/catalog
 POST /me/tabs
@@ -47,7 +48,21 @@ GET  /business/approval/summary
 GET  /business/calendar/summary
 GET  /debug/status
 GET  /oncall/stream?message=...
+POST /oncall/sessions
+GET  /oncall/sessions
+POST /oncall/sessions/{sessionId}/messages
+GET  /oncall/sessions/{sessionId}/messages
+GET  /oncall/sessions/{sessionId}/stream?messageId=...
+DELETE /oncall/sessions/{sessionId}
 ```
+
+AI OnCall 转接配置：
+
+```bash
+AI_SERVICE_BASE_URL=http://121.40.241.161:8081
+```
+
+`POST /api/chat/stream` 按 AI OnCall 文档透出 `event: message` + `type` 事件；`/oncall/.../stream` 会适配为当前 Android 客户端使用的 `delta/tool/done/error` 事件。
 
 ## 当前演示账号
 

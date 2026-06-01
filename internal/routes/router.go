@@ -22,9 +22,10 @@ type Handler struct {
 }
 
 type RuntimeStatus struct {
-	AppMode         string
-	DatabaseEnabled bool
-	DatabaseType    string
+	AppMode          string
+	DatabaseEnabled  bool
+	DatabaseType     string
+	AIServiceBaseURL string
 }
 
 func NewHandler() *Handler {
@@ -44,7 +45,7 @@ func NewHandlerWithStatus(repos repositories.RepositorySet, status RuntimeStatus
 		auth:     services.NewAuthService(repos.Users),
 		tabs:     services.NewTabService(repos.Tabs),
 		business: services.NewBusinessService(repos.Business),
-		oncall:   services.NewOnCallService(repos.OnCall),
+		oncall:   services.NewOnCallService(repos.OnCall, status.AIServiceBaseURL),
 		debug:    services.NewDebugService(repos.Debug),
 		status:   status,
 		sseDelay: 300 * time.Millisecond,
@@ -68,6 +69,7 @@ func RegisterWithStatus(router *gin.Engine, repos repositories.RepositorySet, st
 
 func registerWithHandler(router *gin.Engine, handler *Handler) {
 	router.GET("/health", handler.health)
+	router.POST("/api/chat/stream", handler.streamAIChat)
 
 	auth := router.Group("/auth")
 	{
