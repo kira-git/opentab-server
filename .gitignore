@@ -1,5 +1,5 @@
 # Build outputs
-server
+/server
 server.exe
 *.exe
 *.test
