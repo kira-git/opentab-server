@@ -4,11 +4,19 @@
 
 ## 1. 脚本做什么
 
-`init_postgres_linux.sh` 只做三件事：
+`init_postgres_linux.sh` 默认只做三件事：
 
 1. 创建 PostgreSQL 用户。
 2. 创建 `opentab` 数据库。
 3. 给用户授权。
+
+如果显式设置：
+
+```bash
+OPENTAB_DB_RESET=true
+```
+
+脚本会先断开当前数据库连接，删除旧数据库，再重新创建空数据库。
 
 业务表不在脚本里手写 SQL 创建。服务端启动时会自动执行：
 
@@ -45,6 +53,14 @@ OPENTAB_DB_USER=opentab \
 OPENTAB_DB_PASSWORD=你的密码 \
 ./scripts/init_postgres_linux.sh
 ```
+
+如果要清空云服务器数据库并重建：
+
+```bash
+OPENTAB_DB_RESET=true ./scripts/init_postgres_linux.sh
+```
+
+重建后数据库是空的。随后启动服务端，服务端会自动建表并写入默认初始数据。
 
 ## 3. 启动服务端
 

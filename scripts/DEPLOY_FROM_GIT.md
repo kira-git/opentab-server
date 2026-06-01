@@ -19,6 +19,14 @@ chmod +x scripts/*.sh
 ./scripts/init_postgres_linux.sh
 ```
 
+如果要清空旧数据库并重新初始化：
+
+```bash
+OPENTAB_DB_RESET=true ./scripts/init_postgres_linux.sh
+```
+
+然后再启动服务端。服务端启动时会自动建表并写入默认数据。
+
 ## 后续更新
 
 ```bash
