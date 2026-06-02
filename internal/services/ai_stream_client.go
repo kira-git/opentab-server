@@ -90,9 +90,23 @@ func (c *AIStreamClient) Stream(ctx context.Context, req AIChatRequest, emit fun
 			continue
 		}
 
+		if strings.HasPrefix(rawData, "event:") {
+			eventName = strings.TrimSpace(strings.TrimPrefix(rawData, "event:"))
+			continue
+		}
+		if strings.HasPrefix(rawData, "id:") || strings.HasPrefix(rawData, "retry:") {
+			continue
+		}
+		if strings.HasPrefix(rawData, "data:") {
+			rawData = strings.TrimSpace(strings.TrimPrefix(rawData, "data:"))
+		}
+		if rawData == "" || rawData == "[DONE]" {
+			continue
+		}
+
 		var data map[string]any
 		if err := json.Unmarshal([]byte(rawData), &data); err != nil {
-			return fmt.Errorf("parse AI SSE data: %w", err)
+			continue
 		}
 		if err := emit(AIChatEvent{Event: eventName, Data: data}); err != nil {
 			return err

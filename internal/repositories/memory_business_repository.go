@@ -303,9 +303,6 @@ func (r *MemoryBusinessRepository) UpdateUserGlobalRole(userID string, globalRol
 }
 
 func seedMemoryBusiness() {
-	if len(memoryApprovals) > 0 {
-		return
-	}
 	now := time.Now().Format(time.RFC3339)
 	memoryApprovals = []models.ApprovalItem{
 		{ID: "apv-product-001", TeamID: "team-product", TeamName: "产品研发部", Type: "leave", Title: "请假申请", ApplicantID: "user-product-employee", Applicant: "产品员工", ApproverID: "user-product-manager", Approver: "产品主管", Status: "pending", Summary: "请假 1 天", CreatedAt: now, UpdatedAt: now},

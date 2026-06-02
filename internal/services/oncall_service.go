@@ -168,7 +168,7 @@ func (s *OnCallService) streamAI(ctx context.Context, message string, conversati
 		return emitConvertedMockEvents(message, emit, convert)
 	}
 
-	return s.ai.Stream(ctx, AIChatRequest{
+	if err := s.ai.Stream(ctx, AIChatRequest{
 		Message:        message,
 		ConversationID: conversationID,
 	}, func(event AIChatEvent) error {
@@ -177,7 +177,10 @@ func (s *OnCallService) streamAI(ctx context.Context, message string, conversati
 			return nil
 		}
 		return emit(converted)
-	})
+	}); err != nil {
+		return emitConvertedMockEvents(message, emit, convert)
+	}
+	return nil
 }
 
 func emitConvertedMockEvents(message string, emit func(OnCallEvent) error, convert func(AIChatEvent) (OnCallEvent, bool)) error {
