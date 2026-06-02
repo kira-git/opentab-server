@@ -19,7 +19,18 @@ func (h *Handler) approvalSummary(c *gin.Context) {
 
 func (h *Handler) listApprovalItems(c *gin.Context) {
 	user := middleware.CurrentUser(c)
-	resp, appErr := h.business.ListApprovalItems(user, c.Query("status"))
+	resp, appErr := h.business.ListApprovalItems(user, c.Query("scope"), c.Query("status"), c.Query("teamId"))
+	writeServiceResult(c, resp, appErr)
+}
+
+func (h *Handler) createApprovalItem(c *gin.Context) {
+	user := middleware.CurrentUser(c)
+	var req models.CreateApprovalItemRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, "INVALID_REQUEST", "创建审批请求格式不正确")
+		return
+	}
+	resp, appErr := h.business.CreateApprovalItem(user, req)
 	writeServiceResult(c, resp, appErr)
 }
 
@@ -35,6 +46,12 @@ func (h *Handler) approveItem(c *gin.Context) {
 
 func (h *Handler) rejectItem(c *gin.Context) {
 	h.updateApprovalItem(c, false)
+}
+
+func (h *Handler) cancelApprovalItem(c *gin.Context) {
+	user := middleware.CurrentUser(c)
+	resp, appErr := h.business.CancelApprovalItem(user, c.Param("itemId"))
+	writeServiceResult(c, resp, appErr)
 }
 
 func (h *Handler) updateApprovalItem(c *gin.Context, approved bool) {
@@ -61,7 +78,7 @@ func (h *Handler) calendarSummary(c *gin.Context) {
 
 func (h *Handler) listCalendarEvents(c *gin.Context) {
 	user := middleware.CurrentUser(c)
-	resp, appErr := h.business.ListCalendarEvents(user, c.Query("date"))
+	resp, appErr := h.business.ListCalendarEvents(user, c.Query("scope"), c.Query("date"), c.Query("teamId"))
 	writeServiceResult(c, resp, appErr)
 }
 
@@ -81,5 +98,62 @@ func (h *Handler) createCalendarEvent(c *gin.Context) {
 	}
 
 	resp, appErr := h.business.CreateCalendarEvent(user, req)
+	writeServiceResult(c, resp, appErr)
+}
+
+func (h *Handler) updateCalendarEvent(c *gin.Context) {
+	user := middleware.CurrentUser(c)
+	var req models.CreateCalendarEventRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, "INVALID_REQUEST", "编辑日程请求格式不正确")
+		return
+	}
+	resp, appErr := h.business.UpdateCalendarEvent(user, c.Param("eventId"), req)
+	writeServiceResult(c, resp, appErr)
+}
+
+func (h *Handler) deleteCalendarEvent(c *gin.Context) {
+	user := middleware.CurrentUser(c)
+	resp, appErr := h.business.DeleteCalendarEvent(user, c.Param("eventId"))
+	writeServiceResult(c, resp, appErr)
+}
+
+func (h *Handler) listAnnouncements(c *gin.Context) {
+	user := middleware.CurrentUser(c)
+	resp, appErr := h.business.ListAnnouncements(user, c.Query("scope"), c.Query("teamId"))
+	writeServiceResult(c, resp, appErr)
+}
+
+func (h *Handler) getAnnouncement(c *gin.Context) {
+	user := middleware.CurrentUser(c)
+	resp, appErr := h.business.GetAnnouncement(user, c.Param("announcementId"))
+	writeServiceResult(c, resp, appErr)
+}
+
+func (h *Handler) createAnnouncement(c *gin.Context) {
+	user := middleware.CurrentUser(c)
+	var req models.AnnouncementRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, "INVALID_REQUEST", "发布公告请求格式不正确")
+		return
+	}
+	resp, appErr := h.business.CreateAnnouncement(user, req)
+	writeServiceResult(c, resp, appErr)
+}
+
+func (h *Handler) updateAnnouncement(c *gin.Context) {
+	user := middleware.CurrentUser(c)
+	var req models.AnnouncementRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, "INVALID_REQUEST", "编辑公告请求格式不正确")
+		return
+	}
+	resp, appErr := h.business.UpdateAnnouncement(user, c.Param("announcementId"), req)
+	writeServiceResult(c, resp, appErr)
+}
+
+func (h *Handler) deleteAnnouncement(c *gin.Context) {
+	user := middleware.CurrentUser(c)
+	resp, appErr := h.business.DeleteAnnouncement(user, c.Param("announcementId"))
 	writeServiceResult(c, resp, appErr)
 }

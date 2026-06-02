@@ -17,6 +17,8 @@ func Connect(databaseURL string) (*gorm.DB, error) {
 func AutoMigrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(
 		&UserRecord{},
+		&TeamRecord{},
+		&TeamMemberRecord{},
 		&AuthSessionRecord{},
 		&PermissionRecord{},
 		&UserPermissionRecord{},
@@ -26,6 +28,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&OnCallMessageRecord{},
 		&ApprovalItemRecord{},
 		&CalendarEventRecord{},
+		&AnnouncementRecord{},
 	); err != nil {
 		return err
 	}

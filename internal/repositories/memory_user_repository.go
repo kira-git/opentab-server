@@ -27,6 +27,7 @@ func (r *MemoryUserRepository) FindByAccount(account string) (*models.User, erro
 	if user == nil {
 		return nil, ErrNotFound
 	}
+	applyMemoryMemberships(user)
 	return user, nil
 }
 
@@ -41,6 +42,7 @@ func (r *MemoryUserRepository) FindByToken(token string) (*models.User, error) {
 		return nil, ErrNotFound
 	}
 	user.Token = token
+	applyMemoryMemberships(user)
 	return user, nil
 }
 
@@ -50,6 +52,7 @@ func (r *MemoryUserRepository) Create(user models.User, enabledTabIDs []string) 
 	}
 
 	mockdata.Users = append(mockdata.Users, user)
+	mockdata.Users[len(mockdata.Users)-1].CurrentTeamID = "team-product"
 	if mockdata.UserTabs == nil {
 		mockdata.UserTabs = map[string]map[string]bool{}
 	}
@@ -107,4 +110,24 @@ func findMemoryUserByID(userID string) *models.User {
 		}
 	}
 	return nil
+}
+
+func applyMemoryMemberships(user *models.User) {
+	switch user.ID {
+	case "user-product-manager":
+		user.CurrentTeamID = "team-product"
+		user.Memberships = []models.TeamMembership{{TeamID: "team-product", TeamName: "产品研发部", TeamRole: "manager"}}
+	case "user-product-employee", "user-demo":
+		user.CurrentTeamID = "team-product"
+		user.Memberships = []models.TeamMembership{{TeamID: "team-product", TeamName: "产品研发部", TeamRole: "employee"}}
+	case "user-operation-manager":
+		user.CurrentTeamID = "team-operation"
+		user.Memberships = []models.TeamMembership{{TeamID: "team-operation", TeamName: "运营支持部", TeamRole: "manager"}}
+	case "user-operation-employee":
+		user.CurrentTeamID = "team-operation"
+		user.Memberships = []models.TeamMembership{{TeamID: "team-operation", TeamName: "运营支持部", TeamRole: "employee"}}
+	default:
+		user.Memberships = nil
+		user.CurrentTeamID = ""
+	}
 }

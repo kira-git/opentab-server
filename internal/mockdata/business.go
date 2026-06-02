@@ -61,8 +61,23 @@ var CalendarSummary = models.CalendarSummary{
 }
 
 var Permissions = []map[string]string{
+	{"code": "team.manage", "description": "管理团队、成员和团队角色"},
+	{"code": "team.all.read", "description": "查看所有团队数据"},
+	{"code": "team.member.read", "description": "查看自己团队成员"},
+	{"code": "tab.company.read", "description": "查看公司介绍"},
+	{"code": "tab.announcement.read", "description": "查看公告"},
+	{"code": "tab.announcement.write", "description": "发布和编辑公告"},
+	{"code": "tab.fun.read", "description": "查看放松一刻"},
 	{"code": "tab.approval.read", "description": "查看审批中心"},
+	{"code": "tab.approval.create", "description": "发起审批"},
+	{"code": "tab.approval.approve", "description": "处理审批"},
+	{"code": "tab.approval.all", "description": "查看全部审批"},
 	{"code": "tab.calendar.read", "description": "查看团队日程"},
+	{"code": "tab.calendar.create", "description": "创建日程"},
+	{"code": "tab.calendar.manage", "description": "管理团队日程"},
+	{"code": "tab.calendar.all", "description": "查看全部日程"},
+	{"code": "tab.admin.manage", "description": "管理 Tab 和系统配置"},
+	{"code": "tab.debug.read", "description": "查看调试信息"},
 	{"code": "tab.finance.read", "description": "查看财务看板"},
 	{"code": "ai.oncall", "description": "使用 AI OnCall"},
 }

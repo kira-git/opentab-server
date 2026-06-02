@@ -100,14 +100,29 @@ func (s *AuthService) FindUserByToken(token string) (*models.User, bool) {
 }
 
 func (s *AuthService) GetCurrentUser(user *models.User) models.MeResponse {
+	var globalRole *string
+	if user.GlobalRole != "" {
+		globalRole = &user.GlobalRole
+	}
+	var currentTeamID *string
+	var team *models.Team
+	if user.CurrentTeamID != "" {
+		currentTeamID = &user.CurrentTeamID
+		for _, membership := range user.Memberships {
+			if membership.TeamID == user.CurrentTeamID {
+				team = &models.Team{ID: membership.TeamID, Name: membership.TeamName}
+				break
+			}
+		}
+	}
 	return models.MeResponse{
-		UserID:      user.ID,
-		DisplayName: user.DisplayName,
-		Permissions: user.Permissions,
-		Team: models.Team{
-			ID:   "team-demo",
-			Name: "演示团队",
-		},
+		UserID:        user.ID,
+		DisplayName:   user.DisplayName,
+		GlobalRole:    globalRole,
+		CurrentTeamID: currentTeamID,
+		Memberships:   user.Memberships,
+		Permissions:   user.Permissions,
+		Team:          team,
 	}
 }
 
@@ -135,12 +150,19 @@ func tokenExpiresAt() time.Time {
 const accessTokenTTL = 7 * 24 * time.Hour
 
 var defaultRegisterPermissions = []string{
+	"tab.company.read",
+	"tab.announcement.read",
+	"tab.fun.read",
 	"tab.approval.read",
+	"tab.approval.create",
 	"tab.calendar.read",
 	"ai.oncall",
 }
 
 var defaultRegisterTabs = []string{
+	"company-intro",
+	"announcements",
+	"fun",
 	"approval",
 	"calendar",
 }

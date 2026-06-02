@@ -19,24 +19,36 @@ type LoginResponse struct {
 }
 
 type User struct {
-	ID          string
-	Account     string
-	DisplayName string
-	Password    string
-	Token       string
-	Permissions []string
+	ID            string
+	Account       string
+	DisplayName   string
+	Password      string
+	Token         string
+	GlobalRole    string
+	CurrentTeamID string
+	Memberships   []TeamMembership
+	Permissions   []string
 }
 
 type Team struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
+}
+
+type TeamMembership struct {
+	TeamID   string `json:"teamId"`
+	TeamName string `json:"teamName"`
+	TeamRole string `json:"teamRole"`
 }
 
 type MeResponse struct {
-	UserID      string   `json:"userId"`
-	DisplayName string   `json:"displayName"`
-	Permissions []string `json:"permissions"`
-	Team        Team     `json:"team"`
+	UserID        string           `json:"userId"`
+	DisplayName   string           `json:"displayName"`
+	GlobalRole    *string          `json:"globalRole"`
+	CurrentTeamID *string          `json:"currentTeamId"`
+	Memberships   []TeamMembership `json:"memberships"`
+	Permissions   []string         `json:"permissions"`
+	Team          *Team            `json:"team"`
 }
 
 type SuccessResponse struct {

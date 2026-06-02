@@ -78,6 +78,8 @@ go run ./cmd/server
 
 ```text
 users
+teams
+team_members
 auth_sessions
 permissions
 user_permissions
@@ -87,9 +89,20 @@ oncall_sessions
 oncall_messages
 approval_items
 calendar_events
+announcements
 ```
 
-并写入默认账号、默认 Tab、审批、日程等种子数据。
+并写入默认账号、团队、团队成员、默认 Tab、审批、日程、公告等种子数据。
+
+默认演示账号：
+
+```text
+admin / admin123
+product-manager / manager123
+product-employee / employee123
+operation-manager / manager123
+operation-employee / employee123
+```
 
 ## 4. 为什么不写完整建表 SQL
 

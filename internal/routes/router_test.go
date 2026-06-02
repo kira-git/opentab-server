@@ -118,8 +118,8 @@ func TestRegisterSuccess(t *testing.T) {
 		t.Fatalf("expected registered user tabs status 200, got %d: %s", tabsRecorder.Code, tabsRecorder.Body.String())
 	}
 	tabs := decodeJSON[[]models.TabManifest](t, tabsRecorder.Body)
-	if len(tabs) != 2 {
-		t.Fatalf("expected 2 default tabs, got %d", len(tabs))
+	if len(tabs) != 5 {
+		t.Fatalf("expected 5 default tabs, got %d", len(tabs))
 	}
 }
 
@@ -245,8 +245,8 @@ func TestListCatalogReturnsAllTabs(t *testing.T) {
 	}
 
 	tabs := decodeJSON[[]models.TabManifest](t, recorder.Body)
-	if len(tabs) != 5 {
-		t.Fatalf("expected 5 catalog tabs, got %d", len(tabs))
+	if len(tabs) < 8 {
+		t.Fatalf("expected at least 8 catalog tabs, got %d", len(tabs))
 	}
 }
 
@@ -442,60 +442,120 @@ func TestBusinessAndDebugExpansionEndpoints(t *testing.T) {
 		path   string
 		body   string
 	}{
-		{method: http.MethodGet, path: "/business/approval/items?status=all"},
-		{method: http.MethodGet, path: "/business/approval/items/apv-001"},
-		{method: http.MethodPost, path: "/business/approval/items/apv-001/approve", body: `{"comment":"同意"}`},
-		{method: http.MethodPost, path: "/business/approval/items/apv-001/reject", body: `{"comment":"资料不完整"}`},
-		{method: http.MethodGet, path: "/business/calendar/events?date=2026-05-31"},
-		{method: http.MethodGet, path: "/business/calendar/events/evt-001"},
-		{method: http.MethodPost, path: "/business/calendar/events", body: `{"title":"接口联调","description":"联调 TabManifest 和 AI OnCall","startTime":"2026-05-31T16:00:00+08:00","endTime":"2026-05-31T17:00:00+08:00","location":"线上会议"}`},
+		{method: http.MethodGet, path: "/business/approval/items?scope=mine"},
+		{method: http.MethodGet, path: "/business/approval/items/apv-product-001"},
+		{method: http.MethodPost, path: "/business/approval/items", body: `{"type":"leave","title":"测试请假","reason":"测试","form":{"days":1}}`},
+		{method: http.MethodGet, path: "/business/calendar/events?scope=visible"},
+		{method: http.MethodGet, path: "/business/calendar/events/evt-product-001"},
+		{method: http.MethodPost, path: "/business/calendar/events", body: `{"title":"接口联调","description":"联调 TabManifest 和 AI OnCall","startTime":"2026-05-31T16:00:00+08:00","endTime":"2026-05-31T17:00:00+08:00","location":"线上会议","visibility":"team"}`},
+		{method: http.MethodGet, path: "/business/announcements?scope=visible"},
 		{method: http.MethodGet, path: "/debug/permissions"},
 		{method: http.MethodGet, path: "/debug/sample-tabs"},
 	} {
-		recorder := performRequest(router, item.method, item.path, "mock-access-token", item.body)
+		recorder := performRequest(router, item.method, item.path, "mock-product-manager-token", item.body)
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("%s %s expected status 200, got %d: %s", item.method, item.path, recorder.Code, recorder.Body.String())
 		}
 	}
 }
 
-func TestBusinessDataIsScopedByUser(t *testing.T) {
+func TestBusinessDataIsScopedByTeam(t *testing.T) {
 	router := setupTestRouter()
 
-	userARecorder := performRequest(router, http.MethodPost, "/auth/register", "", `{"account":"scope-user-a","password":"scope123","displayName":"隔离用户 A"}`)
-	if userARecorder.Code != http.StatusOK {
-		t.Fatalf("register user a expected status 200, got %d: %s", userARecorder.Code, userARecorder.Body.String())
-	}
-	userA := decodeJSON[models.LoginResponse](t, userARecorder.Body)
-
-	userBRecorder := performRequest(router, http.MethodPost, "/auth/register", "", `{"account":"scope-user-b","password":"scope123","displayName":"隔离用户 B"}`)
-	if userBRecorder.Code != http.StatusOK {
-		t.Fatalf("register user b expected status 200, got %d: %s", userBRecorder.Code, userBRecorder.Body.String())
-	}
-	userB := decodeJSON[models.LoginResponse](t, userBRecorder.Body)
-
-	approveRecorder := performRequest(router, http.MethodPost, "/business/approval/items/apv-001/approve", userA.Token, `{"comment":"A 通过"}`)
+	approveRecorder := performRequest(router, http.MethodPost, "/business/approval/items/apv-product-001/approve", "mock-product-manager-token", `{"comment":"产品主管通过"}`)
 	if approveRecorder.Code != http.StatusOK {
-		t.Fatalf("user a approve expected status 200, got %d: %s", approveRecorder.Code, approveRecorder.Body.String())
+		t.Fatalf("product manager approve expected status 200, got %d: %s", approveRecorder.Code, approveRecorder.Body.String())
 	}
 
-	userBItemRecorder := performRequest(router, http.MethodGet, "/business/approval/items/apv-001", userB.Token, "")
-	if userBItemRecorder.Code != http.StatusOK {
-		t.Fatalf("user b approval detail expected status 200, got %d: %s", userBItemRecorder.Code, userBItemRecorder.Body.String())
-	}
-	userBItem := decodeJSON[models.ApprovalItem](t, userBItemRecorder.Body)
-	if userBItem.Status != "pending" {
-		t.Fatalf("expected user b approval item to stay pending, got %q", userBItem.Status)
+	operationItemRecorder := performRequest(router, http.MethodGet, "/business/approval/items/apv-product-001", "mock-operation-manager-token", "")
+	if operationItemRecorder.Code != http.StatusNotFound {
+		t.Fatalf("operation manager should not read product approval, got %d: %s", operationItemRecorder.Code, operationItemRecorder.Body.String())
 	}
 
-	createCalendarRecorder := performRequest(router, http.MethodPost, "/business/calendar/events", userA.Token, `{"title":"A 的私有日程","startTime":"2026-05-31T18:00:00+08:00","endTime":"2026-05-31T19:00:00+08:00","location":"线上"}`)
+	createCalendarRecorder := performRequest(router, http.MethodPost, "/business/calendar/events", "mock-product-manager-token", `{"title":"产品团队临时会议","startTime":"2026-05-31T18:00:00+08:00","endTime":"2026-05-31T19:00:00+08:00","location":"线上","visibility":"team"}`)
 	if createCalendarRecorder.Code != http.StatusOK {
-		t.Fatalf("user a create calendar expected status 200, got %d: %s", createCalendarRecorder.Code, createCalendarRecorder.Body.String())
+		t.Fatalf("product manager create calendar expected status 200, got %d: %s", createCalendarRecorder.Code, createCalendarRecorder.Body.String())
 	}
 	createCalendarResp := decodeJSON[models.CreateCalendarEventResponse](t, createCalendarRecorder.Body)
 
-	userBEventRecorder := performRequest(router, http.MethodGet, "/business/calendar/events/"+createCalendarResp.EventID, userB.Token, "")
-	if userBEventRecorder.Code != http.StatusNotFound {
-		t.Fatalf("expected user b cannot read user a calendar event, got %d: %s", userBEventRecorder.Code, userBEventRecorder.Body.String())
+	operationEventRecorder := performRequest(router, http.MethodGet, "/business/calendar/events/"+createCalendarResp.EventID, "mock-operation-employee-token", "")
+	if operationEventRecorder.Code != http.StatusNotFound {
+		t.Fatalf("expected operation employee cannot read product calendar event, got %d: %s", operationEventRecorder.Code, operationEventRecorder.Body.String())
+	}
+}
+
+func TestAdminTeamAndUserManagementEndpoints(t *testing.T) {
+	router := setupTestRouter()
+
+	createTeam := performRequest(router, http.MethodPost, "/admin/teams", "mock-admin-token", `{"teamName":"测试团队","description":"用于接口测试"}`)
+	if createTeam.Code != http.StatusOK {
+		t.Fatalf("create team expected status 200, got %d: %s", createTeam.Code, createTeam.Body.String())
+	}
+	team := decodeJSON[models.TeamAdminItem](t, createTeam.Body)
+	if team.TeamID == "" {
+		t.Fatalf("expected created team id")
+	}
+
+	updateTeam := performRequest(router, http.MethodPut, "/admin/teams/"+team.TeamID, "mock-admin-token", `{"teamName":"测试团队新版","description":"已更新"}`)
+	if updateTeam.Code != http.StatusOK {
+		t.Fatalf("update team expected status 200, got %d: %s", updateTeam.Code, updateTeam.Body.String())
+	}
+
+	addMember := performRequest(router, http.MethodPost, "/admin/teams/"+team.TeamID+"/members", "mock-admin-token", `{"userId":"user-product-employee","teamRole":"employee"}`)
+	if addMember.Code != http.StatusOK {
+		t.Fatalf("add member expected status 200, got %d: %s", addMember.Code, addMember.Body.String())
+	}
+
+	updateMember := performRequest(router, http.MethodPut, "/admin/teams/"+team.TeamID+"/members/user-product-employee", "mock-admin-token", `{"teamRole":"manager"}`)
+	if updateMember.Code != http.StatusOK {
+		t.Fatalf("update member expected status 200, got %d: %s", updateMember.Code, updateMember.Body.String())
+	}
+
+	deleteMember := performRequest(router, http.MethodDelete, "/admin/teams/"+team.TeamID+"/members/user-product-employee", "mock-admin-token", "")
+	if deleteMember.Code != http.StatusOK {
+		t.Fatalf("delete member expected status 200, got %d: %s", deleteMember.Code, deleteMember.Body.String())
+	}
+
+	setRole := performRequest(router, http.MethodPut, "/admin/users/user-product-employee/global-role", "mock-admin-token", `{"globalRole":"admin"}`)
+	if setRole.Code != http.StatusOK {
+		t.Fatalf("set global role expected status 200, got %d: %s", setRole.Code, setRole.Body.String())
+	}
+	user := decodeJSON[models.AdminUserItem](t, setRole.Body)
+	if user.GlobalRole == nil || *user.GlobalRole != "admin" {
+		t.Fatalf("expected user global role admin, got %+v", user.GlobalRole)
+	}
+
+	clearRole := performRequest(router, http.MethodPut, "/admin/users/user-product-employee/global-role", "mock-admin-token", `{"globalRole":null}`)
+	if clearRole.Code != http.StatusOK {
+		t.Fatalf("clear global role expected status 200, got %d: %s", clearRole.Code, clearRole.Body.String())
+	}
+
+	deleteTeam := performRequest(router, http.MethodDelete, "/admin/teams/"+team.TeamID, "mock-admin-token", "")
+	if deleteTeam.Code != http.StatusOK {
+		t.Fatalf("delete team expected status 200, got %d: %s", deleteTeam.Code, deleteTeam.Body.String())
+	}
+}
+
+func TestApprovalCancelEndpoint(t *testing.T) {
+	router := setupTestRouter()
+
+	create := performRequest(router, http.MethodPost, "/business/approval/items", "mock-product-employee-token", `{"type":"leave","title":"我要撤回的申请","reason":"测试撤回","form":{"days":1}}`)
+	if create.Code != http.StatusOK {
+		t.Fatalf("create approval expected status 200, got %d: %s", create.Code, create.Body.String())
+	}
+	item := decodeJSON[models.ApprovalItem](t, create.Body)
+
+	cancel := performRequest(router, http.MethodPost, "/business/approval/items/"+item.ID+"/cancel", "mock-product-employee-token", "")
+	if cancel.Code != http.StatusOK {
+		t.Fatalf("cancel approval expected status 200, got %d: %s", cancel.Code, cancel.Body.String())
+	}
+	resp := decodeJSON[models.ApprovalActionResponse](t, cancel.Body)
+	if resp.Status != "cancelled" {
+		t.Fatalf("expected cancelled status, got %q", resp.Status)
+	}
+
+	otherCancel := performRequest(router, http.MethodPost, "/business/approval/items/apv-product-001/cancel", "mock-operation-employee-token", "")
+	if otherCancel.Code != http.StatusForbidden && otherCancel.Code != http.StatusNotFound && otherCancel.Code != http.StatusBadRequest {
+		t.Fatalf("other team cancel should fail, got %d: %s", otherCancel.Code, otherCancel.Body.String())
 	}
 }

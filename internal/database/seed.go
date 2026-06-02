@@ -17,6 +17,12 @@ func Seed(db *gorm.DB) error {
 		if err := seedUsers(tx); err != nil {
 			return err
 		}
+		if err := seedTeams(tx); err != nil {
+			return err
+		}
+		if err := seedTeamMembers(tx); err != nil {
+			return err
+		}
 		if err := seedPermissions(tx); err != nil {
 			return err
 		}
@@ -35,7 +41,10 @@ func Seed(db *gorm.DB) error {
 		if err := seedApprovalItems(tx); err != nil {
 			return err
 		}
-		return seedCalendarEvents(tx)
+		if err := seedCalendarEvents(tx); err != nil {
+			return err
+		}
+		return seedAnnouncements(tx)
 	})
 }
 
@@ -46,8 +55,10 @@ func seedUsers(db *gorm.DB) error {
 			Account:      user.Account,
 			DisplayName:  user.DisplayName,
 			PasswordHash: user.Password,
+			GlobalRole:   user.GlobalRole,
+			Enabled:      true,
 		}
-		if err := db.Where("id = ?", record.ID).FirstOrCreate(&record).Error; err != nil {
+		if err := db.Where("id = ?", record.ID).Assign(record).FirstOrCreate(&record).Error; err != nil {
 			return fmt.Errorf("seed user %s: %w", user.ID, err)
 		}
 
@@ -67,6 +78,35 @@ func seedUsers(db *gorm.DB) error {
 	return nil
 }
 
+func seedTeams(db *gorm.DB) error {
+	teams := []TeamRecord{
+		{ID: "team-product", Name: "产品研发部", Description: "负责产品、客户端和服务端联调", Enabled: true},
+		{ID: "team-operation", Name: "运营支持部", Description: "负责运营支持和客户协同", Enabled: true},
+	}
+	for _, record := range teams {
+		if err := db.Where("id = ?", record.ID).Assign(record).FirstOrCreate(&record).Error; err != nil {
+			return fmt.Errorf("seed team %s: %w", record.ID, err)
+		}
+	}
+	return nil
+}
+
+func seedTeamMembers(db *gorm.DB) error {
+	now := time.Now()
+	members := []TeamMemberRecord{
+		{TeamID: "team-product", UserID: "user-product-manager", TeamRole: "manager", Enabled: true, JoinedAt: now},
+		{TeamID: "team-product", UserID: "user-product-employee", TeamRole: "employee", Enabled: true, JoinedAt: now},
+		{TeamID: "team-operation", UserID: "user-operation-manager", TeamRole: "manager", Enabled: true, JoinedAt: now},
+		{TeamID: "team-operation", UserID: "user-operation-employee", TeamRole: "employee", Enabled: true, JoinedAt: now},
+	}
+	for _, record := range members {
+		if err := db.Where("team_id = ? AND user_id = ?", record.TeamID, record.UserID).Assign(record).FirstOrCreate(&record).Error; err != nil {
+			return fmt.Errorf("seed team member %s/%s: %w", record.TeamID, record.UserID, err)
+		}
+	}
+	return nil
+}
+
 func seedPermissions(db *gorm.DB) error {
 	for _, permission := range mockdata.Permissions {
 		record := PermissionRecord{
@@ -74,7 +114,7 @@ func seedPermissions(db *gorm.DB) error {
 			Description: permission["description"],
 			CreatedAt:   time.Now(),
 		}
-		if err := db.Where("code = ?", record.Code).FirstOrCreate(&record).Error; err != nil {
+		if err := db.Where("code = ?", record.Code).Assign(record).FirstOrCreate(&record).Error; err != nil {
 			return fmt.Errorf("seed permission %s: %w", record.Code, err)
 		}
 	}
@@ -102,7 +142,7 @@ func seedTabs(db *gorm.DB) error {
 		if err != nil {
 			return err
 		}
-		if err := db.Where("id = ?", record.ID).FirstOrCreate(&record).Error; err != nil {
+		if err := db.Where("id = ?", record.ID).Assign(record).FirstOrCreate(&record).Error; err != nil {
 			return fmt.Errorf("seed tab %s: %w", record.ID, err)
 		}
 	}
@@ -171,54 +211,77 @@ func seedOnCall(db *gorm.DB) error {
 }
 
 func seedApprovalItems(db *gorm.DB) error {
-	for _, user := range mockdata.Users {
-		for _, item := range mockdata.ApprovalSummary.Items {
-			record := ApprovalItemRecord{
-				ID:        businessSeedID(user.ID, item.ID),
-				UserID:    user.ID,
-				Title:     item.Title,
-				Applicant: item.Applicant,
-				Amount:    item.Amount,
-				Reason:    item.Reason,
-				Status:    item.Status,
-				Comment:   item.Comment,
-				CreatedAt: parseTimeOrNow(item.CreatedAt),
-				UpdatedAt: parseTimeOrNow(item.UpdatedAt),
-			}
-			if err := db.Where("id = ?", record.ID).FirstOrCreate(&record).Error; err != nil {
-				return fmt.Errorf("seed approval item %s: %w", record.ID, err)
-			}
-			if err := db.Model(&ApprovalItemRecord{}).Where("id = ? AND user_id = ''", record.ID).Update("user_id", user.ID).Error; err != nil {
-				return fmt.Errorf("backfill approval item user %s: %w", record.ID, err)
-			}
+	items := []ApprovalItemRecord{
+		{
+			ID: "apv-product-001", UserID: "user-product-employee", TeamID: "team-product", Type: "leave",
+			Title: "请假申请", ApplicantID: "user-product-employee", Applicant: "产品员工", ApproverID: "user-product-manager", Approver: "产品主管",
+			Reason: "家中有事，请假一天", Summary: "请假 1 天", Status: "pending",
+			FormJSON:  datatypes.JSON([]byte(`{"leaveType":"事假","days":1}`)),
+			CreatedAt: time.Now().Add(-2 * time.Hour), UpdatedAt: time.Now().Add(-2 * time.Hour),
+		},
+		{
+			ID: "apv-operation-001", UserID: "user-operation-employee", TeamID: "team-operation", Type: "expense",
+			Title: "活动物料报销", ApplicantID: "user-operation-employee", Applicant: "运营员工", ApproverID: "user-operation-manager", Approver: "运营主管",
+			Amount: 320, Reason: "线下活动物料采购", Summary: "报销 320 元", Status: "pending",
+			FormJSON:  datatypes.JSON([]byte(`{"amount":320,"category":"活动物料"}`)),
+			CreatedAt: time.Now().Add(-1 * time.Hour), UpdatedAt: time.Now().Add(-1 * time.Hour),
+		},
+	}
+	for _, record := range items {
+		if err := db.Where("id = ?", record.ID).Assign(record).FirstOrCreate(&record).Error; err != nil {
+			return fmt.Errorf("seed approval item %s: %w", record.ID, err)
 		}
 	}
 	return nil
 }
 
 func seedCalendarEvents(db *gorm.DB) error {
-	for _, user := range mockdata.Users {
-		for _, event := range mockdata.CalendarSummary.Events {
-			participantsJSON, err := json.Marshal(event.Participants)
-			if err != nil {
-				return fmt.Errorf("marshal calendar participants %s: %w", event.ID, err)
-			}
-			record := CalendarEventRecord{
-				ID:               businessSeedID(user.ID, event.ID),
-				UserID:           user.ID,
-				Title:            event.Title,
-				Description:      event.Description,
-				StartTime:        parseTimeOrNow(event.StartTime),
-				EndTime:          parseTimeOrNow(event.EndTime),
-				Location:         event.Location,
-				ParticipantsJSON: datatypes.JSON(participantsJSON),
-			}
-			if err := db.Where("id = ?", record.ID).FirstOrCreate(&record).Error; err != nil {
-				return fmt.Errorf("seed calendar event %s: %w", record.ID, err)
-			}
-			if err := db.Model(&CalendarEventRecord{}).Where("id = ? AND user_id = ''", record.ID).Update("user_id", user.ID).Error; err != nil {
-				return fmt.Errorf("backfill calendar event user %s: %w", record.ID, err)
-			}
+	events := []CalendarEventRecord{
+		calendarSeedRecord("evt-product-001", "team-product", "user-product-manager", "产品主管", "产品研发部周会", "同步开放式 Tab 容器联调进展", "线上会议", []string{"产品主管", "产品员工"}, []string{"user-product-manager", "user-product-employee"}),
+		calendarSeedRecord("evt-operation-001", "team-operation", "user-operation-manager", "运营主管", "运营支持部周会", "同步运营支持和客户反馈", "会议室 A", []string{"运营主管", "运营员工"}, []string{"user-operation-manager", "user-operation-employee"}),
+		calendarSeedRecord("evt-company-001", "", "user-admin", "系统管理员", "全公司阶段同步", "开放式 Tab 容器阶段演示", "线上会议", []string{"全员"}, []string{}),
+	}
+	for _, record := range events {
+		if err := db.Where("id = ?", record.ID).Assign(record).FirstOrCreate(&record).Error; err != nil {
+			return fmt.Errorf("seed calendar event %s: %w", record.ID, err)
+		}
+	}
+	return nil
+}
+
+func calendarSeedRecord(id string, teamID string, creatorID string, creatorName string, title string, description string, location string, participants []string, participantIDs []string) CalendarEventRecord {
+	participantsJSON, _ := json.Marshal(participants)
+	participantIDsJSON, _ := json.Marshal(participantIDs)
+	visibility := "team"
+	if teamID == "" {
+		visibility = "company"
+	}
+	return CalendarEventRecord{
+		ID:                 id,
+		UserID:             creatorID,
+		TeamID:             teamID,
+		Visibility:         visibility,
+		CreatorID:          creatorID,
+		CreatorName:        creatorName,
+		Title:              title,
+		Description:        description,
+		StartTime:          time.Now().Add(24 * time.Hour),
+		EndTime:            time.Now().Add(25 * time.Hour),
+		Location:           location,
+		ParticipantsJSON:   datatypes.JSON(participantsJSON),
+		ParticipantIDsJSON: datatypes.JSON(participantIDsJSON),
+	}
+}
+
+func seedAnnouncements(db *gorm.DB) error {
+	records := []AnnouncementRecord{
+		{ID: "ann-company-001", Scope: "company", Title: "全公司阶段同步", Content: "本周进行开放式 Tab 容器和 AI OnCall 阶段演示。", PublisherID: "user-admin", PublisherName: "系统管理员", Pinned: true},
+		{ID: "ann-product-001", TeamID: "team-product", Scope: "team", Title: "产品研发部周五分享", Content: "本周五 16:00 分享开放式 Tab 容器联调进展。", PublisherID: "user-product-manager", PublisherName: "产品主管"},
+		{ID: "ann-operation-001", TeamID: "team-operation", Scope: "team", Title: "运营支持部客户反馈整理", Content: "请在周五前整理客户反馈和常见问题。", PublisherID: "user-operation-manager", PublisherName: "运营主管"},
+	}
+	for _, record := range records {
+		if err := db.Where("id = ?", record.ID).Assign(record).FirstOrCreate(&record).Error; err != nil {
+			return fmt.Errorf("seed announcement %s: %w", record.ID, err)
 		}
 	}
 	return nil

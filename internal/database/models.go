@@ -11,12 +11,41 @@ type UserRecord struct {
 	Account      string `gorm:"uniqueIndex;size:64;not null"`
 	DisplayName  string `gorm:"size:128;not null"`
 	PasswordHash string `gorm:"size:255;not null"`
+	GlobalRole   string `gorm:"index;size:32"`
+	Enabled      bool   `gorm:"not null;default:true"`
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
 
 func (UserRecord) TableName() string {
 	return "users"
+}
+
+type TeamRecord struct {
+	ID          string `gorm:"primaryKey;size:64"`
+	Name        string `gorm:"size:128;not null"`
+	Description string `gorm:"type:text"`
+	Enabled     bool   `gorm:"not null;default:true"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func (TeamRecord) TableName() string {
+	return "teams"
+}
+
+type TeamMemberRecord struct {
+	TeamID    string    `gorm:"primaryKey;size:64;index"`
+	UserID    string    `gorm:"primaryKey;size:64;index"`
+	TeamRole  string    `gorm:"index;size:32;not null"`
+	Enabled   bool      `gorm:"not null;default:true"`
+	JoinedAt  time.Time `gorm:"index"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func (TeamMemberRecord) TableName() string {
+	return "team_members"
 }
 
 type AuthSessionRecord struct {
@@ -118,16 +147,23 @@ func (OnCallMessageRecord) TableName() string {
 }
 
 type ApprovalItemRecord struct {
-	ID        string `gorm:"primaryKey;size:64"`
-	UserID    string `gorm:"index:idx_approval_user_status_created,priority:1;size:64"`
-	Title     string `gorm:"size:255;not null"`
-	Applicant string `gorm:"size:128;not null"`
-	Amount    int
-	Reason    string    `gorm:"type:text"`
-	Status    string    `gorm:"index:idx_approval_user_status_created,priority:2;size:32;not null"`
-	Comment   string    `gorm:"type:text"`
-	CreatedAt time.Time `gorm:"index:idx_approval_user_status_created,priority:3"`
-	UpdatedAt time.Time
+	ID          string `gorm:"primaryKey;size:64"`
+	UserID      string `gorm:"index:idx_approval_user_status_created,priority:1;size:64"`
+	TeamID      string `gorm:"index:idx_approval_team_status_created,priority:1;size:64"`
+	Type        string `gorm:"size:64"`
+	Title       string `gorm:"size:255;not null"`
+	ApplicantID string `gorm:"index;size:64"`
+	Applicant   string `gorm:"size:128;not null"`
+	ApproverID  string `gorm:"index;size:64"`
+	Approver    string `gorm:"size:128"`
+	Amount      int
+	Reason      string         `gorm:"type:text"`
+	Summary     string         `gorm:"type:text"`
+	FormJSON    datatypes.JSON `gorm:"type:jsonb"`
+	Status      string         `gorm:"index:idx_approval_user_status_created,priority:2;size:32;not null"`
+	Comment     string         `gorm:"type:text"`
+	CreatedAt   time.Time      `gorm:"index:idx_approval_user_status_created,priority:3"`
+	UpdatedAt   time.Time
 }
 
 func (ApprovalItemRecord) TableName() string {
@@ -135,18 +171,41 @@ func (ApprovalItemRecord) TableName() string {
 }
 
 type CalendarEventRecord struct {
-	ID               string         `gorm:"primaryKey;size:64"`
-	UserID           string         `gorm:"index:idx_calendar_user_time_range,priority:1;size:64"`
-	Title            string         `gorm:"size:255;not null"`
-	Description      string         `gorm:"type:text"`
-	StartTime        time.Time      `gorm:"index:idx_calendar_user_time_range,priority:2;not null"`
-	EndTime          time.Time      `gorm:"index:idx_calendar_user_time_range,priority:3;not null"`
-	Location         string         `gorm:"size:255"`
-	ParticipantsJSON datatypes.JSON `gorm:"type:jsonb"`
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID                 string         `gorm:"primaryKey;size:64"`
+	UserID             string         `gorm:"index:idx_calendar_user_time_range,priority:1;size:64"`
+	TeamID             string         `gorm:"index:idx_calendar_team_time_range,priority:1;size:64"`
+	Visibility         string         `gorm:"index;size:32;not null;default:team"`
+	CreatorID          string         `gorm:"index;size:64"`
+	CreatorName        string         `gorm:"size:128"`
+	Title              string         `gorm:"size:255;not null"`
+	Description        string         `gorm:"type:text"`
+	StartTime          time.Time      `gorm:"index:idx_calendar_user_time_range,priority:2;not null"`
+	EndTime            time.Time      `gorm:"index:idx_calendar_user_time_range,priority:3;not null"`
+	Location           string         `gorm:"size:255"`
+	ParticipantsJSON   datatypes.JSON `gorm:"type:jsonb"`
+	ParticipantIDsJSON datatypes.JSON `gorm:"type:jsonb"`
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func (CalendarEventRecord) TableName() string {
 	return "calendar_events"
+}
+
+type AnnouncementRecord struct {
+	ID            string     `gorm:"primaryKey;size:64"`
+	TeamID        string     `gorm:"index;size:64"`
+	Scope         string     `gorm:"index;size:32;not null"`
+	Title         string     `gorm:"size:255;not null"`
+	Content       string     `gorm:"type:text;not null"`
+	PublisherID   string     `gorm:"index;size:64;not null"`
+	PublisherName string     `gorm:"size:128;not null"`
+	Pinned        bool       `gorm:"not null;default:false"`
+	DeletedAt     *time.Time `gorm:"index"`
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+func (AnnouncementRecord) TableName() string {
+	return "announcements"
 }

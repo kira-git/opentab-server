@@ -103,13 +103,37 @@ func registerWithHandler(router *gin.Engine, handler *Handler) {
 	{
 		business.GET("/approval/summary", handler.approvalSummary)
 		business.GET("/approval/items", handler.listApprovalItems)
+		business.POST("/approval/items", handler.createApprovalItem)
 		business.GET("/approval/items/:itemId", handler.getApprovalItem)
 		business.POST("/approval/items/:itemId/approve", handler.approveItem)
 		business.POST("/approval/items/:itemId/reject", handler.rejectItem)
+		business.POST("/approval/items/:itemId/cancel", handler.cancelApprovalItem)
 		business.GET("/calendar/summary", handler.calendarSummary)
 		business.GET("/calendar/events", handler.listCalendarEvents)
 		business.GET("/calendar/events/:eventId", handler.getCalendarEvent)
 		business.POST("/calendar/events", handler.createCalendarEvent)
+		business.PUT("/calendar/events/:eventId", handler.updateCalendarEvent)
+		business.DELETE("/calendar/events/:eventId", handler.deleteCalendarEvent)
+		business.GET("/announcements", handler.listAnnouncements)
+		business.POST("/announcements", handler.createAnnouncement)
+		business.GET("/announcements/:announcementId", handler.getAnnouncement)
+		business.PUT("/announcements/:announcementId", handler.updateAnnouncement)
+		business.DELETE("/announcements/:announcementId", handler.deleteAnnouncement)
+	}
+
+	admin := authorized.Group("/admin")
+	{
+		admin.GET("/teams", handler.listAdminTeams)
+		admin.POST("/teams", handler.createAdminTeam)
+		admin.PUT("/teams/:teamId", handler.updateAdminTeam)
+		admin.DELETE("/teams/:teamId", handler.deleteAdminTeam)
+		admin.GET("/teams/:teamId/members", handler.listAdminTeamMembers)
+		admin.POST("/teams/:teamId/members", handler.addAdminTeamMember)
+		admin.PUT("/teams/:teamId/members/:userId", handler.updateAdminTeamMember)
+		admin.DELETE("/teams/:teamId/members/:userId", handler.deleteAdminTeamMember)
+		admin.GET("/users", handler.listAdminUsers)
+		admin.GET("/users/:userId", handler.getAdminUser)
+		admin.PUT("/users/:userId/global-role", handler.updateAdminUserGlobalRole)
 	}
 
 	debug := authorized.Group("/debug")

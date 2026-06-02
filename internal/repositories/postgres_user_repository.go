@@ -58,6 +58,8 @@ func (r *PostgresUserRepository) Create(user models.User, enabledTabIDs []string
 			Account:      user.Account,
 			DisplayName:  user.DisplayName,
 			PasswordHash: user.Password,
+			GlobalRole:   user.GlobalRole,
+			Enabled:      true,
 		}
 		if err := tx.Create(&userRecord).Error; err != nil {
 			return mapCreateError(err)
@@ -83,6 +85,16 @@ func (r *PostgresUserRepository) Create(user models.User, enabledTabIDs []string
 			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&record).Error; err != nil {
 				return err
 			}
+		}
+		member := database.TeamMemberRecord{
+			TeamID:   "team-product",
+			UserID:   user.ID,
+			TeamRole: "employee",
+			Enabled:  true,
+			JoinedAt: time.Now(),
+		}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&member).Error; err != nil {
+			return err
 		}
 		if err := createDefaultBusinessData(tx, user.ID); err != nil {
 			return err
@@ -130,15 +142,52 @@ func (r *PostgresUserRepository) userWithPermissions(user database.UserRecord) (
 
 	var session database.AuthSessionRecord
 	_ = r.db.Where("user_id = ? AND revoked_at IS NULL", user.ID).First(&session).Error
+	memberships, currentTeamID, err := r.userMemberships(user.ID)
+	if err != nil {
+		return nil, err
+	}
 
 	return &models.User{
-		ID:          user.ID,
-		Account:     user.Account,
-		DisplayName: user.DisplayName,
-		Password:    user.PasswordHash,
-		Token:       session.Token,
-		Permissions: permissions,
+		ID:            user.ID,
+		Account:       user.Account,
+		DisplayName:   user.DisplayName,
+		Password:      user.PasswordHash,
+		Token:         session.Token,
+		GlobalRole:    user.GlobalRole,
+		CurrentTeamID: currentTeamID,
+		Memberships:   memberships,
+		Permissions:   permissions,
 	}, nil
+}
+
+func (r *PostgresUserRepository) userMemberships(userID string) ([]models.TeamMembership, string, error) {
+	type row struct {
+		TeamID   string
+		TeamName string
+		TeamRole string
+	}
+	var rows []row
+	if err := r.db.Table("team_members").
+		Select("team_members.team_id, teams.name AS team_name, team_members.team_role").
+		Joins("JOIN teams ON teams.id = team_members.team_id").
+		Where("team_members.user_id = ? AND team_members.enabled = true AND teams.enabled = true", userID).
+		Order("team_members.joined_at ASC").
+		Scan(&rows).Error; err != nil {
+		return nil, "", err
+	}
+	memberships := make([]models.TeamMembership, 0, len(rows))
+	currentTeamID := ""
+	for i, item := range rows {
+		memberships = append(memberships, models.TeamMembership{
+			TeamID:   item.TeamID,
+			TeamName: item.TeamName,
+			TeamRole: item.TeamRole,
+		})
+		if i == 0 {
+			currentTeamID = item.TeamID
+		}
+	}
+	return memberships, currentTeamID, nil
 }
 
 func timeNow() time.Time {
