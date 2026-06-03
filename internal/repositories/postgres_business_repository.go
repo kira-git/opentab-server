@@ -8,6 +8,7 @@ import (
 
 	"opentab-server/internal/database"
 	"opentab-server/internal/models"
+	"opentab-server/internal/policies"
 
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -67,9 +68,6 @@ func (r *PostgresBusinessRepository) CreateApprovalItem(user *models.User, req m
 	if teamID == "" {
 		teamID = user.CurrentTeamID
 	}
-	if teamID == "" || (!isAdmin(user) && !userInTeam(user, teamID)) {
-		return nil, ErrForbidden
-	}
 	approverID, approverName, err := r.firstTeamManager(teamID)
 	if err != nil {
 		return nil, err
@@ -102,12 +100,6 @@ func (r *PostgresBusinessRepository) UpdateApprovalStatus(user *models.User, ite
 	if err := r.db.Where("id = ?", itemID).First(&record).Error; err != nil {
 		return nil, mapGormError(err)
 	}
-	if record.Status != "pending" {
-		return nil, ErrInvalidState
-	}
-	if !isAdmin(user) && !userHasTeamRole(user, record.TeamID, "manager") {
-		return nil, ErrForbidden
-	}
 	record.Status = status
 	record.Comment = comment
 	if err := r.db.Save(&record).Error; err != nil {
@@ -121,12 +113,6 @@ func (r *PostgresBusinessRepository) CancelApprovalItem(user *models.User, itemI
 	var record database.ApprovalItemRecord
 	if err := r.db.Where("id = ?", itemID).First(&record).Error; err != nil {
 		return nil, mapGormError(err)
-	}
-	if record.Status != "pending" {
-		return nil, ErrInvalidState
-	}
-	if record.ApplicantID != user.ID && record.UserID != user.ID {
-		return nil, ErrForbidden
 	}
 	record.Status = "cancelled"
 	record.Comment = "发起人已撤回"
@@ -181,12 +167,6 @@ func (r *PostgresBusinessRepository) CreateCalendarEvent(user *models.User, req 
 		teamID = user.CurrentTeamID
 	}
 	visibility := valueOrDefault(req.Visibility, "team")
-	if visibility == "company" && !isAdmin(user) {
-		return nil, ErrForbidden
-	}
-	if visibility != "company" && (!isAdmin(user) && !userHasTeamRole(user, teamID, "manager")) {
-		return nil, ErrForbidden
-	}
 	record := calendarRequestToRecord(user, "", teamID, visibility, req)
 	if err := r.db.Create(&record).Error; err != nil {
 		return nil, err
@@ -199,9 +179,6 @@ func (r *PostgresBusinessRepository) UpdateCalendarEvent(user *models.User, even
 	var record database.CalendarEventRecord
 	if err := r.db.Where("id = ?", eventID).First(&record).Error; err != nil {
 		return nil, mapGormError(err)
-	}
-	if !canManageCalendar(user, record) {
-		return nil, ErrForbidden
 	}
 	updated := calendarRequestToRecord(user, record.ID, valueOrDefault(req.TeamID, record.TeamID), valueOrDefault(req.Visibility, record.Visibility), req)
 	record.Title = updated.Title
@@ -224,9 +201,6 @@ func (r *PostgresBusinessRepository) DeleteCalendarEvent(user *models.User, even
 	var record database.CalendarEventRecord
 	if err := r.db.Where("id = ?", eventID).First(&record).Error; err != nil {
 		return mapGormError(err)
-	}
-	if !canManageCalendar(user, record) {
-		return ErrForbidden
 	}
 	return r.db.Delete(&record).Error
 }
@@ -273,9 +247,6 @@ func (r *PostgresBusinessRepository) FindAnnouncement(user *models.User, announc
 }
 
 func (r *PostgresBusinessRepository) CreateAnnouncement(user *models.User, req models.AnnouncementRequest) (*models.Announcement, error) {
-	if !canWriteAnnouncement(user, req.Scope, req.TeamID) {
-		return nil, ErrForbidden
-	}
 	record := database.AnnouncementRecord{
 		ID:            fmt.Sprintf("ann-%d", time.Now().UnixNano()),
 		TeamID:        req.TeamID,
@@ -301,9 +272,6 @@ func (r *PostgresBusinessRepository) UpdateAnnouncement(user *models.User, annou
 	if err := r.db.Where("id = ? AND deleted_at IS NULL", announcementID).First(&record).Error; err != nil {
 		return nil, mapGormError(err)
 	}
-	if !canManageAnnouncement(user, record) {
-		return nil, ErrForbidden
-	}
 	record.Title = strings.TrimSpace(req.Title)
 	record.Content = strings.TrimSpace(req.Content)
 	record.Pinned = req.Pinned
@@ -318,9 +286,6 @@ func (r *PostgresBusinessRepository) DeleteAnnouncement(user *models.User, annou
 	var record database.AnnouncementRecord
 	if err := r.db.Where("id = ? AND deleted_at IS NULL", announcementID).First(&record).Error; err != nil {
 		return mapGormError(err)
-	}
-	if !canManageAnnouncement(user, record) {
-		return ErrForbidden
 	}
 	now := time.Now()
 	return r.db.Model(&record).Update("deleted_at", &now).Error
@@ -527,9 +492,9 @@ func (r *PostgresBusinessRepository) applyCalendarVisibility(query *gorm.DB, use
 	case "team":
 		return query.Where("visibility = 'team' AND team_id = ?", targetTeamID)
 	case "mine":
-		return query.Where("creator_id = ? OR participant_ids_json::text LIKE ?", user.ID, "%"+user.ID+"%")
+		return query.Where("creator_id = ? OR participant_ids_json @> ?::jsonb", user.ID, jsonArrayContainsValue(user.ID))
 	default:
-		return query.Where("visibility = 'company' OR (visibility = 'team' AND team_id = ?) OR creator_id = ? OR participant_ids_json::text LIKE ?", user.CurrentTeamID, user.ID, "%"+user.ID+"%")
+		return query.Where("visibility = 'company' OR (visibility = 'team' AND team_id = ?) OR creator_id = ? OR participant_ids_json @> ?::jsonb", user.CurrentTeamID, user.ID, jsonArrayContainsValue(user.ID))
 	}
 }
 
@@ -698,59 +663,34 @@ func (r *PostgresBusinessRepository) membershipsForUser(userID string) ([]models
 }
 
 func canViewApproval(user *models.User, record database.ApprovalItemRecord) bool {
-	return isAdmin(user) || record.ApplicantID == user.ID || record.UserID == user.ID || userHasTeamRole(user, record.TeamID, "manager")
+	return policies.CanViewApproval(user, record.ApplicantID, record.UserID, record.TeamID)
 }
 
 func canViewCalendar(user *models.User, record database.CalendarEventRecord) bool {
-	return isAdmin(user) || record.Visibility == "company" || record.TeamID == user.CurrentTeamID || record.CreatorID == user.ID || jsonTextContains(record.ParticipantIDsJSON, user.ID)
-}
-
-func canManageCalendar(user *models.User, record database.CalendarEventRecord) bool {
-	return isAdmin(user) || userHasTeamRole(user, record.TeamID, "manager")
+	return policies.CanViewCalendar(user, record.Visibility, record.TeamID, record.CreatorID, jsonStringArray(record.ParticipantIDsJSON))
 }
 
 func canViewAnnouncement(user *models.User, record database.AnnouncementRecord) bool {
-	return isAdmin(user) || record.Scope == "company" || record.TeamID == user.CurrentTeamID
-}
-
-func canWriteAnnouncement(user *models.User, scope string, teamID string) bool {
-	if isAdmin(user) {
-		return true
-	}
-	if scope == "company" {
-		return false
-	}
-	return userHasTeamRole(user, valueOrDefault(teamID, user.CurrentTeamID), "manager")
-}
-
-func canManageAnnouncement(user *models.User, record database.AnnouncementRecord) bool {
-	return isAdmin(user) || userHasTeamRole(user, record.TeamID, "manager")
+	return policies.CanViewAnnouncement(user, record.Scope, record.TeamID)
 }
 
 func isAdmin(user *models.User) bool {
-	return user.GlobalRole == "admin"
+	return policies.IsAdmin(user)
 }
 
 func userInTeam(user *models.User, teamID string) bool {
-	for _, membership := range user.Memberships {
-		if membership.TeamID == teamID {
-			return true
-		}
-	}
-	return false
+	return policies.InTeam(user, teamID)
 }
 
-func userHasTeamRole(user *models.User, teamID string, role string) bool {
-	for _, membership := range user.Memberships {
-		if membership.TeamID == teamID && membership.TeamRole == role {
-			return true
-		}
-	}
-	return false
+func jsonStringArray(data datatypes.JSON) []string {
+	items := []string{}
+	_ = json.Unmarshal(data, &items)
+	return items
 }
 
-func jsonTextContains(data datatypes.JSON, value string) bool {
-	return strings.Contains(string(data), value)
+func jsonArrayContainsValue(value string) string {
+	data, _ := json.Marshal([]string{value})
+	return string(data)
 }
 
 func approvalScopeFromStatus(status string) string {

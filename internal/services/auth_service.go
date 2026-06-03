@@ -10,6 +10,7 @@ import (
 
 	"opentab-server/internal/models"
 	"opentab-server/internal/repositories"
+	"opentab-server/internal/security"
 )
 
 type AuthService struct {
@@ -25,11 +26,19 @@ func (s *AuthService) Login(account string, password string) (*models.LoginRespo
 	if errors.Is(err, repositories.ErrNotFound) {
 		return nil, NewAppError(http.StatusUnauthorized, "INVALID_CREDENTIALS", "账号或密码不正确")
 	}
+	if errors.Is(err, repositories.ErrUserDisabled) {
+		return nil, NewAppError(http.StatusForbidden, "USER_DISABLED", "账号已被禁用")
+	}
 	if err != nil {
 		return nil, NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "登录失败")
 	}
-	if user.Password != password {
+	if !security.VerifyPassword(user.Password, password) {
 		return nil, NewAppError(http.StatusUnauthorized, "INVALID_CREDENTIALS", "账号或密码不正确")
+	}
+	if !security.IsBcryptHash(user.Password) {
+		if passwordHash, hashErr := security.HashPassword(password); hashErr == nil {
+			_ = s.users.UpdatePasswordHash(user.ID, passwordHash)
+		}
 	}
 
 	token := newAccessToken()
@@ -72,9 +81,13 @@ func (s *AuthService) Register(req models.RegisterRequest) (*models.LoginRespons
 		ID:          "user-" + randomHex(8),
 		Account:     account,
 		DisplayName: displayName,
-		Password:    password,
 		Permissions: defaultRegisterPermissions,
 	}
+	passwordHash, hashErr := security.HashPassword(password)
+	if hashErr != nil {
+		return nil, NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "注册失败")
+	}
+	user.Password = passwordHash
 	if err := s.users.Create(user, defaultRegisterTabs); err != nil {
 		if errors.Is(err, repositories.ErrConflict) {
 			return nil, NewAppError(http.StatusConflict, "ACCOUNT_EXISTS", "账号已存在")
@@ -94,9 +107,8 @@ func (s *AuthService) Register(req models.RegisterRequest) (*models.LoginRespons
 	}, nil
 }
 
-func (s *AuthService) FindUserByToken(token string) (*models.User, bool) {
-	user, err := s.users.FindByToken(token)
-	return user, err == nil
+func (s *AuthService) FindUserByToken(token string) (*models.User, error) {
+	return s.users.FindByToken(token)
 }
 
 func (s *AuthService) GetCurrentUser(user *models.User) models.MeResponse {

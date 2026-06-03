@@ -44,6 +44,35 @@ nohup 启动新 server
 curl /health 验证
 ```
 
+## 演示前一键重置部署
+
+如果需要清掉旧服务、重建数据库、清空测试脏数据、生成脱敏演示数据并启动新服务，使用：
+
+```bash
+cd /home/server
+chmod +x scripts/*.sh
+APP_MODE=postgres \
+DATABASE_URL="postgres://opentab:opentab123@localhost:5432/opentab?sslmode=disable" \
+HOST=0.0.0.0 \
+PORT=8080 \
+AI_SERVICE_BASE_URL="http://127.0.0.1:8081" \
+./scripts/deploy_demo_reset.sh
+```
+
+这个脚本会执行：
+
+```text
+git fetch + reset 到 origin/main
+停止旧 OpenTab server
+重建 opentab 数据库
+go test ./...
+nohup 启动新服务
+执行 reset_demo_data.sql 写入脱敏演示数据
+curl /health 验证
+```
+
+注意：这个脚本会丢弃云服务器 `server` 目录里的本地改动，适合演示部署，不适合保留云端临时修改。
+
 ## 数据库同步
 
 当前阶段数据库结构由服务启动时的 GORM 自动处理：

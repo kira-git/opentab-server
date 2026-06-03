@@ -94,6 +94,12 @@ announcements
 
 并写入默认账号、团队、团队成员、默认 Tab、审批、日程、公告等种子数据。
 
+`users.password_hash` 字段存储 bcrypt 哈希，不再存明文密码。旧数据库中如果仍有明文密码，用户登录成功后服务端会自动升级为 bcrypt 哈希。
+
+`auth_sessions` 会记录 token 的过期时间和吊销时间，鉴权时会检查 token 是否存在、是否过期、是否已 logout 吊销，以及用户账号是否仍启用。
+
+核心业务表会随 GORM model 自动创建用户/团队隔离相关索引，例如审批按 `team_id + status + created_at` 查询，日程按 `team_id + start_time/end_time` 查询，AI 会话按 `user_id + updated_at` 查询。
+
 默认演示账号：
 
 ```text

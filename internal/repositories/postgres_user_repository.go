@@ -27,21 +27,30 @@ func (r *PostgresUserRepository) FindByAccount(account string) (*models.User, er
 	if err := r.db.Where("account = ?", account).First(&user).Error; err != nil {
 		return nil, mapGormError(err)
 	}
+	if !user.Enabled {
+		return nil, ErrUserDisabled
+	}
 	return r.userWithPermissions(user)
 }
 
 func (r *PostgresUserRepository) FindByToken(token string) (*models.User, error) {
 	var session database.AuthSessionRecord
-	if err := r.db.Where("token = ? AND revoked_at IS NULL", token).First(&session).Error; err != nil {
+	if err := r.db.Where("token = ?", token).First(&session).Error; err != nil {
 		return nil, mapGormError(err)
 	}
+	if session.RevokedAt != nil {
+		return nil, ErrTokenRevoked
+	}
 	if session.ExpiresAt != nil && session.ExpiresAt.Before(timeNow()) {
-		return nil, ErrNotFound
+		return nil, ErrTokenExpired
 	}
 
 	var user database.UserRecord
 	if err := r.db.Where("id = ?", session.UserID).First(&user).Error; err != nil {
 		return nil, mapGormError(err)
+	}
+	if !user.Enabled {
+		return nil, ErrUserDisabled
 	}
 	result, err := r.userWithPermissions(user)
 	if err != nil {
@@ -103,6 +112,17 @@ func (r *PostgresUserRepository) Create(user models.User, enabledTabIDs []string
 	})
 }
 
+func (r *PostgresUserRepository) UpdatePasswordHash(userID string, passwordHash string) error {
+	result := r.db.Model(&database.UserRecord{}).Where("id = ?", userID).Update("password_hash", passwordHash)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (r *PostgresUserRepository) CreateSession(userID string, token string, expiresAt time.Time) error {
 	session := database.AuthSessionRecord{
 		ID:        fmt.Sprintf("session-%d", time.Now().UnixNano()),
@@ -157,6 +177,7 @@ func (r *PostgresUserRepository) userWithPermissions(user database.UserRecord) (
 		CurrentTeamID: currentTeamID,
 		Memberships:   memberships,
 		Permissions:   permissions,
+		Enabled:       user.Enabled,
 	}, nil
 }
 

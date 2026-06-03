@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"opentab-server/internal/models"
+	"opentab-server/internal/policies"
 )
 
 type MemoryBusinessRepository struct{}
@@ -63,9 +64,6 @@ func (r *MemoryBusinessRepository) CreateApprovalItem(user *models.User, req mod
 func (r *MemoryBusinessRepository) UpdateApprovalStatus(user *models.User, itemID string, status string, comment string) (*models.ApprovalItem, error) {
 	for i := range memoryApprovals {
 		if memoryApprovals[i].ID == itemID {
-			if user.GlobalRole != "admin" && !memoryHasRole(user, memoryApprovals[i].TeamID, "manager") {
-				return nil, ErrForbidden
-			}
 			memoryApprovals[i].Status = status
 			memoryApprovals[i].Comment = comment
 			memoryApprovals[i].UpdatedAt = time.Now().Format(time.RFC3339)
@@ -78,12 +76,6 @@ func (r *MemoryBusinessRepository) UpdateApprovalStatus(user *models.User, itemI
 func (r *MemoryBusinessRepository) CancelApprovalItem(user *models.User, itemID string) (*models.ApprovalItem, error) {
 	for i := range memoryApprovals {
 		if memoryApprovals[i].ID == itemID {
-			if memoryApprovals[i].Status != "pending" {
-				return nil, ErrInvalidState
-			}
-			if memoryApprovals[i].ApplicantID != "" && memoryApprovals[i].ApplicantID != user.ID {
-				return nil, ErrForbidden
-			}
 			memoryApprovals[i].Status = "cancelled"
 			memoryApprovals[i].Comment = "发起人已撤回"
 			memoryApprovals[i].UpdatedAt = time.Now().Format(time.RFC3339)
@@ -104,7 +96,7 @@ func (r *MemoryBusinessRepository) ListCalendarEvents(user *models.User, scope s
 		if date != "" && !strings.HasPrefix(event.StartTime, date) {
 			continue
 		}
-		if user.GlobalRole == "admin" || event.Visibility == "company" || event.TeamID == user.CurrentTeamID || event.CreatorID == user.ID || stringSliceContains(event.ParticipantIDs, user.ID) {
+		if policies.CanViewCalendar(user, event.Visibility, event.TeamID, event.CreatorID, event.ParticipantIDs) {
 			result = append(result, event)
 		}
 	}
@@ -114,7 +106,7 @@ func (r *MemoryBusinessRepository) ListCalendarEvents(user *models.User, scope s
 func (r *MemoryBusinessRepository) FindCalendarEvent(user *models.User, eventID string) (*models.CalendarEvent, error) {
 	for _, event := range memoryEvents {
 		if event.ID == eventID {
-			if user.GlobalRole != "admin" && event.Visibility != "company" && event.TeamID != user.CurrentTeamID && event.CreatorID != user.ID && !stringSliceContains(event.ParticipantIDs, user.ID) {
+			if !policies.CanViewCalendar(user, event.Visibility, event.TeamID, event.CreatorID, event.ParticipantIDs) {
 				return nil, ErrNotFound
 			}
 			return &event, nil
@@ -152,7 +144,7 @@ func (r *MemoryBusinessRepository) DeleteCalendarEvent(user *models.User, eventI
 func (r *MemoryBusinessRepository) ListAnnouncements(user *models.User, scope string, teamID string) ([]models.Announcement, error) {
 	result := []models.Announcement{}
 	for _, item := range memoryAnnouncements {
-		if user.GlobalRole == "admin" || item.Scope == "company" || item.TeamID == user.CurrentTeamID {
+		if policies.CanViewAnnouncement(user, item.Scope, item.TeamID) {
 			result = append(result, item)
 		}
 	}
@@ -303,50 +295,45 @@ func (r *MemoryBusinessRepository) UpdateUserGlobalRole(userID string, globalRol
 }
 
 func seedMemoryBusiness() {
-	now := time.Now().Format(time.RFC3339)
+	now := "2026-06-03T09:00:00+08:00"
 	memoryApprovals = []models.ApprovalItem{
-		{ID: "apv-product-001", TeamID: "team-product", TeamName: "产品研发部", Type: "leave", Title: "请假申请", ApplicantID: "user-product-employee", Applicant: "产品员工", ApproverID: "user-product-manager", Approver: "产品主管", Status: "pending", Summary: "请假 1 天", CreatedAt: now, UpdatedAt: now},
-		{ID: "apv-operation-001", TeamID: "team-operation", TeamName: "运营支持部", Type: "expense", Title: "活动物料报销", ApplicantID: "user-operation-employee", Applicant: "运营员工", ApproverID: "user-operation-manager", Approver: "运营主管", Status: "pending", Summary: "报销 320 元", CreatedAt: now, UpdatedAt: now},
+		{ID: "apv-product-001", TeamID: "team-product", TeamName: "产品研发部", Type: "leave", Title: "周五下午请假", ApplicantID: "user-product-employee", Applicant: "陈磊", ApproverID: "user-product-manager", Approver: "刘洋", Status: "pending", Summary: "请假 0.5 天，已补充交接安排", CreatedAt: "2026-06-03T09:20:00+08:00", UpdatedAt: "2026-06-03T09:20:00+08:00"},
+		{ID: "apv-operation-001", TeamID: "team-operation", TeamName: "运营支持部", Type: "expense", Title: "客户走访物料报销", ApplicantID: "user-operation-employee", Applicant: "李静", ApproverID: "user-operation-manager", Approver: "张敏", Status: "pending", Summary: "报销 320 元，客户走访物料", CreatedAt: "2026-06-03T10:05:00+08:00", UpdatedAt: "2026-06-03T10:05:00+08:00"},
+		{ID: "apv-product-002", TeamID: "team-product", TeamName: "产品研发部", Type: "purchase", Title: "测试设备采购申请", ApplicantID: "user-product-employee", Applicant: "陈磊", ApproverID: "user-product-manager", Approver: "刘洋", Amount: 1299, Status: "approved", Summary: "采购一台测试机，预算 1299 元", Comment: "同意采购，注意登记资产编号", CreatedAt: "2026-06-02T15:40:00+08:00", UpdatedAt: "2026-06-02T16:10:00+08:00"},
 	}
 	memoryEvents = []models.CalendarEvent{
-		{ID: "evt-product-001", TeamID: "team-product", TeamName: "产品研发部", Visibility: "team", CreatorID: "user-product-manager", CreatorName: "产品主管", Title: "产品研发部周会", StartTime: now, EndTime: now, ParticipantIDs: []string{"user-product-employee"}},
-		{ID: "evt-operation-001", TeamID: "team-operation", TeamName: "运营支持部", Visibility: "team", CreatorID: "user-operation-manager", CreatorName: "运营主管", Title: "运营支持部周会", StartTime: now, EndTime: now, ParticipantIDs: []string{"user-operation-employee"}},
-		{ID: "evt-company-001", Visibility: "company", CreatorID: "user-admin", CreatorName: "系统管理员", Title: "全公司阶段同步", StartTime: now, EndTime: now},
+		{ID: "evt-product-001", TeamID: "team-product", TeamName: "产品研发部", Visibility: "team", CreatorID: "user-product-manager", CreatorName: "刘洋", Title: "产品研发部晨会", Description: "确认 Tab 注册、权限和 AI OnCall 联调进展", StartTime: "2026-06-03T09:30:00+08:00", EndTime: "2026-06-03T10:00:00+08:00", Location: "线上会议", Participants: []string{"刘洋", "陈磊"}, ParticipantIDs: []string{"user-product-manager", "user-product-employee"}},
+		{ID: "evt-operation-001", TeamID: "team-operation", TeamName: "运营支持部", Visibility: "team", CreatorID: "user-operation-manager", CreatorName: "张敏", Title: "客户反馈整理", Description: "汇总近期客户对工作台 Tab 的反馈", StartTime: "2026-06-03T10:30:00+08:00", EndTime: "2026-06-03T11:00:00+08:00", Location: "会议室 A", Participants: []string{"张敏", "李静"}, ParticipantIDs: []string{"user-operation-manager", "user-operation-employee"}},
+		{ID: "evt-product-002", TeamID: "team-product", TeamName: "产品研发部", Visibility: "team", CreatorID: "user-product-manager", CreatorName: "刘洋", Title: "Tab 容器联调复盘", Description: "检查客户端 Tab 列表、审批和日程数据展示", StartTime: "2026-06-03T14:00:00+08:00", EndTime: "2026-06-03T15:00:00+08:00", Location: "开发群语音", Participants: []string{"刘洋", "陈磊"}, ParticipantIDs: []string{"user-product-manager", "user-product-employee"}},
+		{ID: "evt-operation-002", TeamID: "team-operation", TeamName: "运营支持部", Visibility: "team", CreatorID: "user-operation-manager", CreatorName: "张敏", Title: "公告发布确认", Description: "确认阶段演示公告内容和发布范围", StartTime: "2026-06-03T16:00:00+08:00", EndTime: "2026-06-03T16:40:00+08:00", Location: "会议室 B", Participants: []string{"张敏", "李静"}, ParticipantIDs: []string{"user-operation-manager", "user-operation-employee"}},
+		{ID: "evt-company-001", Visibility: "company", CreatorID: "user-admin", CreatorName: "张伟", Title: "阶段演示彩排", Description: "开放式 Tab 容器与 AI OnCall 助理阶段演示", StartTime: "2026-06-04T15:30:00+08:00", EndTime: "2026-06-04T16:30:00+08:00", Location: "线上会议"},
 	}
 	memoryAnnouncements = []models.Announcement{
-		{ID: "ann-company-001", Scope: "company", Title: "全公司阶段同步", Content: "本周进行阶段演示。", PublisherID: "user-admin", PublisherName: "系统管理员", Pinned: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "ann-product-001", TeamID: "team-product", TeamName: "产品研发部", Scope: "team", Title: "产品研发部周五分享", Content: "周五 16:00 分享联调进展。", PublisherID: "user-product-manager", PublisherName: "产品主管", CreatedAt: now, UpdatedAt: now},
+		{ID: "ann-company-001", Scope: "company", Title: "阶段演示安排", Content: "本周四 15:30 进行开放式 Tab 容器与 AI OnCall 助理阶段演示，请相关成员提前完成数据检查。", PublisherID: "user-admin", PublisherName: "张伟", Pinned: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "ann-product-001", TeamID: "team-product", TeamName: "产品研发部", Scope: "team", Title: "产品研发部联调提醒", Content: "请在今天 14:00 前确认 Tab 列表、审批中心和日程接口在客户端展示正常。", PublisherID: "user-product-manager", PublisherName: "刘洋", CreatedAt: now, UpdatedAt: now},
+		{ID: "ann-operation-001", TeamID: "team-operation", TeamName: "运营支持部", Scope: "team", Title: "客户反馈整理", Content: "请在周三下班前整理客户反馈和常见问题，重点标注和工作台 Tab 相关的需求。", PublisherID: "user-operation-manager", PublisherName: "张敏", CreatedAt: now, UpdatedAt: now},
 	}
 	memoryTeams = []models.TeamAdminItem{
 		{TeamID: "team-product", TeamName: "产品研发部", Description: "负责产品、客户端和服务端联调", MemberCount: 2, ManagerCount: 1, Enabled: true, CreatedAt: now, UpdatedAt: now},
 		{TeamID: "team-operation", TeamName: "运营支持部", Description: "负责运营支持和客户协同", MemberCount: 2, ManagerCount: 1, Enabled: true, CreatedAt: now, UpdatedAt: now},
 	}
 	memoryAdminUsers = []models.AdminUserItem{
-		adminUser("user-admin", "admin", "系统管理员", "admin", nil),
-		adminUser("user-product-manager", "product-manager", "产品主管", "", []models.TeamMembership{{TeamID: "team-product", TeamName: "产品研发部", TeamRole: "manager"}}),
-		adminUser("user-product-employee", "product-employee", "产品员工", "", []models.TeamMembership{{TeamID: "team-product", TeamName: "产品研发部", TeamRole: "employee"}}),
-		adminUser("user-operation-manager", "operation-manager", "运营主管", "", []models.TeamMembership{{TeamID: "team-operation", TeamName: "运营支持部", TeamRole: "manager"}}),
-		adminUser("user-operation-employee", "operation-employee", "运营员工", "", []models.TeamMembership{{TeamID: "team-operation", TeamName: "运营支持部", TeamRole: "employee"}}),
+		adminUser("user-admin", "admin", "张伟", "admin", nil),
+		adminUser("user-product-manager", "product-manager", "刘洋", "", []models.TeamMembership{{TeamID: "team-product", TeamName: "产品研发部", TeamRole: "manager"}}),
+		adminUser("user-product-employee", "product-employee", "陈磊", "", []models.TeamMembership{{TeamID: "team-product", TeamName: "产品研发部", TeamRole: "employee"}}),
+		adminUser("user-operation-manager", "operation-manager", "张敏", "", []models.TeamMembership{{TeamID: "team-operation", TeamName: "运营支持部", TeamRole: "manager"}}),
+		adminUser("user-operation-employee", "operation-employee", "李静", "", []models.TeamMembership{{TeamID: "team-operation", TeamName: "运营支持部", TeamRole: "employee"}}),
 	}
 }
 
 func canSeeMemoryApproval(user *models.User, item models.ApprovalItem, scope string) bool {
-	if user.GlobalRole == "admin" {
+	if policies.IsAdmin(user) {
 		return true
 	}
 	if scope == "pending" {
-		return item.TeamID == user.CurrentTeamID && item.Status == "pending" && memoryHasRole(user, item.TeamID, "manager")
+		return item.TeamID == user.CurrentTeamID && item.Status == "pending" && policies.HasTeamRole(user, item.TeamID, "manager")
 	}
-	return item.ApplicantID == user.ID || memoryHasRole(user, item.TeamID, "manager")
-}
-
-func memoryHasRole(user *models.User, teamID string, role string) bool {
-	for _, membership := range user.Memberships {
-		if membership.TeamID == teamID && membership.TeamRole == role {
-			return true
-		}
-	}
-	return false
+	return policies.CanViewApproval(user, item.ApplicantID, "", item.TeamID)
 }
 
 func calendarFromRequest(user *models.User, id string, req models.CreateCalendarEventRequest) models.CalendarEvent {
@@ -384,9 +371,9 @@ func memoryManagerID(teamID string) string {
 
 func memoryManagerName(teamID string) string {
 	if teamID == "team-operation" {
-		return "运营主管"
+		return "张敏"
 	}
-	return "产品主管"
+	return "刘洋"
 }
 
 func valueOr(value string, fallback string) string {
@@ -394,13 +381,4 @@ func valueOr(value string, fallback string) string {
 		return fallback
 	}
 	return strings.TrimSpace(value)
-}
-
-func stringSliceContains(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
 }

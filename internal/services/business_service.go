@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"opentab-server/internal/models"
+	"opentab-server/internal/policies"
 	"opentab-server/internal/repositories"
 )
 
@@ -50,6 +51,10 @@ func (s *BusinessService) CreateApprovalItem(user *models.User, req models.Creat
 	if req.Title == "" {
 		return nil, NewAppError(http.StatusBadRequest, "INVALID_REQUEST", "title 不可为空")
 	}
+	req.TeamID = targetTeamID(user, req.TeamID)
+	if !policies.CanCreateApproval(user, req.TeamID) {
+		return nil, forbidden("当前账号无权在该团队发起审批")
+	}
 	value, err := s.business.CreateApprovalItem(user, req)
 	return wrapBusinessResult(value, err, "审批资源不存在", "创建审批失败")
 }
@@ -66,6 +71,16 @@ func (s *BusinessService) updateApprovalStatus(user *models.User, itemID string,
 	if !hasPermission(user, "tab.approval.approve") && !hasPermission(user, "tab.approval.all") {
 		return nil, forbidden("当前账号无权操作审批数据")
 	}
+	current, err := s.business.FindApprovalItem(user, itemID)
+	if appErr := mapRepoError(err, "审批记录不存在", "获取审批详情失败"); appErr != nil {
+		return nil, appErr
+	}
+	if current.Status != "pending" {
+		return nil, NewAppError(http.StatusBadRequest, "INVALID_APPROVAL_STATE", "当前状态不允许执行该操作")
+	}
+	if !policies.CanApproveTeamApproval(user, current.TeamID) {
+		return nil, forbidden("当前账号无权限执行该操作")
+	}
 	item, err := s.business.UpdateApprovalStatus(user, itemID, status, comment)
 	if appErr := mapRepoError(err, "审批记录不存在", "更新审批状态失败"); appErr != nil {
 		return nil, appErr
@@ -76,6 +91,16 @@ func (s *BusinessService) updateApprovalStatus(user *models.User, itemID string,
 func (s *BusinessService) CancelApprovalItem(user *models.User, itemID string) (*models.ApprovalActionResponse, *AppError) {
 	if !hasPermission(user, "tab.approval.create") {
 		return nil, forbidden("当前账号无权撤回审批")
+	}
+	current, err := s.business.FindApprovalItem(user, itemID)
+	if appErr := mapRepoError(err, "审批记录不存在", "获取审批详情失败"); appErr != nil {
+		return nil, appErr
+	}
+	if current.Status != "pending" {
+		return nil, NewAppError(http.StatusBadRequest, "INVALID_APPROVAL_STATE", "当前状态不允许执行该操作")
+	}
+	if !policies.CanCancelApproval(user, current.ApplicantID, "") {
+		return nil, forbidden("当前账号无权限执行该操作")
 	}
 	item, err := s.business.CancelApprovalItem(user, itemID)
 	if appErr := mapRepoError(err, "审批记录不存在", "撤回审批失败"); appErr != nil {
@@ -118,6 +143,15 @@ func (s *BusinessService) CreateCalendarEvent(user *models.User, req models.Crea
 	if req.Title == "" || req.StartTime == "" || req.EndTime == "" {
 		return nil, NewAppError(http.StatusBadRequest, "INVALID_REQUEST", "title、startTime、endTime 不可为空")
 	}
+	req.TeamID = targetTeamID(user, req.TeamID)
+	req.Visibility = defaultValue(req.Visibility, "team")
+	if req.Visibility == "company" {
+		if !policies.IsAdmin(user) {
+			return nil, forbidden("当前账号无权新增全公司日程")
+		}
+	} else if !policies.CanManageCalendar(user, req.TeamID) {
+		return nil, forbidden("当前账号无权新增该团队日程")
+	}
 	event, err := s.business.CreateCalendarEvent(user, req)
 	if appErr := mapRepoError(err, "团队或用户不存在", "新增日程失败"); appErr != nil {
 		return nil, appErr
@@ -129,6 +163,18 @@ func (s *BusinessService) UpdateCalendarEvent(user *models.User, eventID string,
 	if !hasPermission(user, "tab.calendar.manage") && !hasPermission(user, "tab.calendar.all") {
 		return nil, forbidden("当前账号无权编辑日程")
 	}
+	current, err := s.business.FindCalendarEvent(user, eventID)
+	if appErr := mapRepoError(err, "日程不存在", "获取日程详情失败"); appErr != nil {
+		return nil, appErr
+	}
+	if !policies.CanManageCalendar(user, current.TeamID) {
+		return nil, forbidden("当前账号无权限执行该操作")
+	}
+	req.TeamID = defaultValue(req.TeamID, current.TeamID)
+	req.Visibility = defaultValue(req.Visibility, current.Visibility)
+	if req.Visibility == "company" && !policies.IsAdmin(user) {
+		return nil, forbidden("当前账号无权编辑为全公司日程")
+	}
 	value, err := s.business.UpdateCalendarEvent(user, eventID, req)
 	return wrapBusinessResult(value, err, "日程不存在", "编辑日程失败")
 }
@@ -136,6 +182,13 @@ func (s *BusinessService) UpdateCalendarEvent(user *models.User, eventID string,
 func (s *BusinessService) DeleteCalendarEvent(user *models.User, eventID string) (models.SuccessResponse, *AppError) {
 	if !hasPermission(user, "tab.calendar.manage") && !hasPermission(user, "tab.calendar.all") {
 		return models.SuccessResponse{}, forbidden("当前账号无权删除日程")
+	}
+	current, err := s.business.FindCalendarEvent(user, eventID)
+	if appErr := mapRepoError(err, "日程不存在", "获取日程详情失败"); appErr != nil {
+		return models.SuccessResponse{}, appErr
+	}
+	if !policies.CanManageCalendar(user, current.TeamID) {
+		return models.SuccessResponse{}, forbidden("当前账号无权限执行该操作")
 	}
 	if appErr := mapRepoError(s.business.DeleteCalendarEvent(user, eventID), "日程不存在", "删除日程失败"); appErr != nil {
 		return models.SuccessResponse{}, appErr
@@ -166,6 +219,11 @@ func (s *BusinessService) CreateAnnouncement(user *models.User, req models.Annou
 	if req.Title == "" || req.Content == "" {
 		return nil, NewAppError(http.StatusBadRequest, "INVALID_REQUEST", "title、content 不可为空")
 	}
+	req.Scope = defaultValue(req.Scope, "team")
+	req.TeamID = targetTeamID(user, req.TeamID)
+	if !policies.CanWriteAnnouncement(user, req.Scope, req.TeamID) {
+		return nil, forbidden("当前账号无权发布该范围公告")
+	}
 	value, err := s.business.CreateAnnouncement(user, req)
 	return wrapBusinessResult(value, err, "团队不存在", "发布公告失败")
 }
@@ -173,6 +231,13 @@ func (s *BusinessService) CreateAnnouncement(user *models.User, req models.Annou
 func (s *BusinessService) UpdateAnnouncement(user *models.User, announcementID string, req models.AnnouncementRequest) (*models.Announcement, *AppError) {
 	if !hasPermission(user, "tab.announcement.write") {
 		return nil, forbidden("当前账号无权编辑公告")
+	}
+	current, err := s.business.FindAnnouncement(user, announcementID)
+	if appErr := mapRepoError(err, "公告不存在", "获取公告详情失败"); appErr != nil {
+		return nil, appErr
+	}
+	if !policies.CanManageAnnouncement(user, current.TeamID) {
+		return nil, forbidden("当前账号无权限执行该操作")
 	}
 	value, err := s.business.UpdateAnnouncement(user, announcementID, req)
 	return wrapBusinessResult(value, err, "公告不存在", "编辑公告失败")
@@ -182,6 +247,13 @@ func (s *BusinessService) DeleteAnnouncement(user *models.User, announcementID s
 	if !hasPermission(user, "tab.announcement.write") {
 		return models.SuccessResponse{}, forbidden("当前账号无权删除公告")
 	}
+	current, err := s.business.FindAnnouncement(user, announcementID)
+	if appErr := mapRepoError(err, "公告不存在", "获取公告详情失败"); appErr != nil {
+		return models.SuccessResponse{}, appErr
+	}
+	if !policies.CanManageAnnouncement(user, current.TeamID) {
+		return models.SuccessResponse{}, forbidden("当前账号无权限执行该操作")
+	}
 	if appErr := mapRepoError(s.business.DeleteAnnouncement(user, announcementID), "公告不存在", "删除公告失败"); appErr != nil {
 		return models.SuccessResponse{}, appErr
 	}
@@ -189,7 +261,7 @@ func (s *BusinessService) DeleteAnnouncement(user *models.User, announcementID s
 }
 
 func (s *BusinessService) ListTeams(user *models.User) ([]models.TeamAdminItem, *AppError) {
-	if !hasPermission(user, "team.manage") {
+	if !policies.CanManageTeam(user) {
 		return nil, forbidden("当前账号无权管理团队")
 	}
 	value, err := s.business.ListTeams()
@@ -197,7 +269,7 @@ func (s *BusinessService) ListTeams(user *models.User) ([]models.TeamAdminItem, 
 }
 
 func (s *BusinessService) CreateTeam(user *models.User, req models.TeamRequest) (*models.TeamAdminItem, *AppError) {
-	if !hasPermission(user, "team.manage") {
+	if !policies.CanManageTeam(user) {
 		return nil, forbidden("当前账号无权创建团队")
 	}
 	if req.TeamName == "" {
@@ -208,7 +280,7 @@ func (s *BusinessService) CreateTeam(user *models.User, req models.TeamRequest) 
 }
 
 func (s *BusinessService) UpdateTeam(user *models.User, teamID string, req models.TeamRequest) (*models.TeamAdminItem, *AppError) {
-	if !hasPermission(user, "team.manage") {
+	if !policies.CanManageTeam(user) {
 		return nil, forbidden("当前账号无权编辑团队")
 	}
 	if req.TeamName == "" {
@@ -219,7 +291,7 @@ func (s *BusinessService) UpdateTeam(user *models.User, teamID string, req model
 }
 
 func (s *BusinessService) DisableTeam(user *models.User, teamID string) (models.SuccessResponse, *AppError) {
-	if !hasPermission(user, "team.manage") {
+	if !policies.CanManageTeam(user) {
 		return models.SuccessResponse{}, forbidden("当前账号无权停用团队")
 	}
 	if appErr := mapRepoError(s.business.DisableTeam(teamID), "团队不存在", "停用团队失败"); appErr != nil {
@@ -229,7 +301,7 @@ func (s *BusinessService) DisableTeam(user *models.User, teamID string) (models.
 }
 
 func (s *BusinessService) ListTeamMembers(user *models.User, teamID string) ([]models.TeamMemberItem, *AppError) {
-	if !hasPermission(user, "team.manage") && !hasPermission(user, "team.member.read") {
+	if !policies.CanReadTeamMembers(user) {
 		return nil, forbidden("当前账号无权查看团队成员")
 	}
 	value, err := s.business.ListTeamMembers(teamID)
@@ -237,7 +309,7 @@ func (s *BusinessService) ListTeamMembers(user *models.User, teamID string) ([]m
 }
 
 func (s *BusinessService) AddTeamMember(user *models.User, teamID string, req models.TeamMemberMutationRequest) (*models.TeamMemberMutationResponse, *AppError) {
-	if !hasPermission(user, "team.manage") {
+	if !policies.CanManageTeam(user) {
 		return nil, forbidden("当前账号无权管理团队成员")
 	}
 	value, err := s.business.AddTeamMember(teamID, req)
@@ -245,7 +317,7 @@ func (s *BusinessService) AddTeamMember(user *models.User, teamID string, req mo
 }
 
 func (s *BusinessService) UpdateTeamMember(user *models.User, teamID string, targetUserID string, req models.TeamMemberMutationRequest) (*models.TeamMemberMutationResponse, *AppError) {
-	if !hasPermission(user, "team.manage") {
+	if !policies.CanManageTeam(user) {
 		return nil, forbidden("当前账号无权管理团队成员")
 	}
 	value, err := s.business.UpdateTeamMember(teamID, targetUserID, req)
@@ -253,7 +325,7 @@ func (s *BusinessService) UpdateTeamMember(user *models.User, teamID string, tar
 }
 
 func (s *BusinessService) RemoveTeamMember(user *models.User, teamID string, targetUserID string) (models.SuccessResponse, *AppError) {
-	if !hasPermission(user, "team.manage") {
+	if !policies.CanManageTeam(user) {
 		return models.SuccessResponse{}, forbidden("当前账号无权移出团队成员")
 	}
 	if appErr := mapRepoError(s.business.RemoveTeamMember(teamID, targetUserID), "团队成员不存在", "移出团队成员失败"); appErr != nil {
@@ -263,7 +335,7 @@ func (s *BusinessService) RemoveTeamMember(user *models.User, teamID string, tar
 }
 
 func (s *BusinessService) ListAdminUsers(user *models.User, teamID string, keyword string) ([]models.AdminUserItem, *AppError) {
-	if !hasPermission(user, "team.manage") {
+	if !policies.CanManageTeam(user) {
 		return nil, forbidden("当前账号无权查看用户列表")
 	}
 	value, err := s.business.ListAdminUsers(teamID, keyword)
@@ -271,7 +343,7 @@ func (s *BusinessService) ListAdminUsers(user *models.User, teamID string, keywo
 }
 
 func (s *BusinessService) GetAdminUser(user *models.User, targetUserID string) (*models.AdminUserItem, *AppError) {
-	if !hasPermission(user, "team.manage") {
+	if !policies.CanManageTeam(user) {
 		return nil, forbidden("当前账号无权查看用户详情")
 	}
 	value, err := s.business.FindAdminUser(targetUserID)
@@ -279,7 +351,7 @@ func (s *BusinessService) GetAdminUser(user *models.User, targetUserID string) (
 }
 
 func (s *BusinessService) UpdateUserGlobalRole(user *models.User, targetUserID string, req models.GlobalRoleRequest) (*models.AdminUserItem, *AppError) {
-	if !hasPermission(user, "team.manage") {
+	if !policies.CanManageTeam(user) {
 		return nil, forbidden("当前账号无权修改全局角色")
 	}
 	value, err := s.business.UpdateUserGlobalRole(targetUserID, req.GlobalRole)
@@ -288,6 +360,23 @@ func (s *BusinessService) UpdateUserGlobalRole(user *models.User, targetUserID s
 
 func forbidden(message string) *AppError {
 	return NewAppError(http.StatusForbidden, "FORBIDDEN", message)
+}
+
+func targetTeamID(user *models.User, requestedTeamID string) string {
+	if requestedTeamID != "" {
+		return requestedTeamID
+	}
+	if user == nil {
+		return ""
+	}
+	return user.CurrentTeamID
+}
+
+func defaultValue(value string, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func wrapOK[T any](value T, err error, internalMessage string) (T, *AppError) {

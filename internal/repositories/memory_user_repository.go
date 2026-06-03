@@ -28,14 +28,21 @@ func (r *MemoryUserRepository) FindByAccount(account string) (*models.User, erro
 		return nil, ErrNotFound
 	}
 	applyMemoryMemberships(user)
+	user.Enabled = true
 	return user, nil
 }
 
 func (r *MemoryUserRepository) FindByToken(token string) (*models.User, error) {
 	seedMemoryAuthSessions()
 	session, ok := memoryAuthSessions[token]
-	if !ok || session.RevokedAt != nil || time.Now().After(session.ExpiresAt) {
+	if !ok {
 		return nil, ErrNotFound
+	}
+	if session.RevokedAt != nil {
+		return nil, ErrTokenRevoked
+	}
+	if time.Now().After(session.ExpiresAt) {
+		return nil, ErrTokenExpired
 	}
 	user := findMemoryUserByID(session.UserID)
 	if user == nil {
@@ -43,6 +50,7 @@ func (r *MemoryUserRepository) FindByToken(token string) (*models.User, error) {
 	}
 	user.Token = token
 	applyMemoryMemberships(user)
+	user.Enabled = true
 	return user, nil
 }
 
@@ -60,6 +68,15 @@ func (r *MemoryUserRepository) Create(user models.User, enabledTabIDs []string) 
 	for _, tabID := range enabledTabIDs {
 		mockdata.UserTabs[user.ID][tabID] = true
 	}
+	return nil
+}
+
+func (r *MemoryUserRepository) UpdatePasswordHash(userID string, passwordHash string) error {
+	user := findMemoryUserByID(userID)
+	if user == nil {
+		return ErrNotFound
+	}
+	user.Password = passwordHash
 	return nil
 }
 

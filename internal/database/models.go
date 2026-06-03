@@ -52,8 +52,8 @@ type AuthSessionRecord struct {
 	ID        string     `gorm:"primaryKey;size:64"`
 	UserID    string     `gorm:"index;size:64;not null"`
 	Token     string     `gorm:"uniqueIndex;size:255;not null"`
-	ExpiresAt *time.Time `gorm:"index"`
-	RevokedAt *time.Time
+	ExpiresAt *time.Time `gorm:"index:idx_auth_sessions_expires_revoked,priority:1"`
+	RevokedAt *time.Time `gorm:"index:idx_auth_sessions_expires_revoked,priority:2"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -160,9 +160,9 @@ type ApprovalItemRecord struct {
 	Reason      string         `gorm:"type:text"`
 	Summary     string         `gorm:"type:text"`
 	FormJSON    datatypes.JSON `gorm:"type:jsonb"`
-	Status      string         `gorm:"index:idx_approval_user_status_created,priority:2;size:32;not null"`
+	Status      string         `gorm:"index:idx_approval_user_status_created,priority:2;index:idx_approval_team_status_created,priority:2;size:32;not null"`
 	Comment     string         `gorm:"type:text"`
-	CreatedAt   time.Time      `gorm:"index:idx_approval_user_status_created,priority:3"`
+	CreatedAt   time.Time      `gorm:"index:idx_approval_user_status_created,priority:3;index:idx_approval_team_status_created,priority:3"`
 	UpdatedAt   time.Time
 }
 
@@ -194,15 +194,15 @@ func (CalendarEventRecord) TableName() string {
 
 type AnnouncementRecord struct {
 	ID            string     `gorm:"primaryKey;size:64"`
-	TeamID        string     `gorm:"index;size:64"`
-	Scope         string     `gorm:"index;size:32;not null"`
+	TeamID        string     `gorm:"index:idx_announcements_scope_team_created,priority:2;size:64"`
+	Scope         string     `gorm:"index:idx_announcements_scope_team_created,priority:1;size:32;not null"`
 	Title         string     `gorm:"size:255;not null"`
 	Content       string     `gorm:"type:text;not null"`
 	PublisherID   string     `gorm:"index;size:64;not null"`
 	PublisherName string     `gorm:"size:128;not null"`
 	Pinned        bool       `gorm:"not null;default:false"`
 	DeletedAt     *time.Time `gorm:"index"`
-	CreatedAt     time.Time
+	CreatedAt     time.Time  `gorm:"index:idx_announcements_scope_team_created,priority:3"`
 	UpdatedAt     time.Time
 }
 

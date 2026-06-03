@@ -28,6 +28,7 @@ type User struct {
 	CurrentTeamID string
 	Memberships   []TeamMembership
 	Permissions   []string
+	Enabled       bool
 }
 
 type Team struct {

@@ -172,6 +172,10 @@ func TestLogoutSuccess(t *testing.T) {
 	if meRecorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected revoked token status 401, got %d: %s", meRecorder.Code, meRecorder.Body.String())
 	}
+	errResp := decodeJSON[models.ErrorResponse](t, meRecorder.Body)
+	if errResp.Code != "TOKEN_REVOKED" {
+		t.Fatalf("expected TOKEN_REVOKED, got %q", errResp.Code)
+	}
 }
 
 func TestListTabsRequiresToken(t *testing.T) {

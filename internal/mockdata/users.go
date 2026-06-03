@@ -6,7 +6,7 @@ var Users = []models.User{
 	{
 		ID:          "user-demo",
 		Account:     "opentab-demo",
-		DisplayName: "OpenTab 演示账号",
+		DisplayName: "李娜",
 		Password:    "demo123",
 		Token:       "mock-access-token",
 		Permissions: []string{
@@ -18,7 +18,7 @@ var Users = []models.User{
 	{
 		ID:          "user-admin",
 		Account:     "admin",
-		DisplayName: "系统管理员",
+		DisplayName: "张伟",
 		Password:    "admin123",
 		Token:       "mock-admin-token",
 		GlobalRole:  "admin",
@@ -45,7 +45,7 @@ var Users = []models.User{
 	{
 		ID:          "user-guest",
 		Account:     "opentab-guest",
-		DisplayName: "OpenTab 访客",
+		DisplayName: "王芳",
 		Password:    "guest123",
 		Token:       "mock-guest-token",
 		Permissions: []string{
@@ -55,7 +55,7 @@ var Users = []models.User{
 	{
 		ID:            "user-product-manager",
 		Account:       "product-manager",
-		DisplayName:   "产品主管",
+		DisplayName:   "刘洋",
 		Password:      "manager123",
 		Token:         "mock-product-manager-token",
 		CurrentTeamID: "team-product",
@@ -64,7 +64,7 @@ var Users = []models.User{
 	{
 		ID:            "user-product-employee",
 		Account:       "product-employee",
-		DisplayName:   "产品员工",
+		DisplayName:   "陈磊",
 		Password:      "employee123",
 		Token:         "mock-product-employee-token",
 		CurrentTeamID: "team-product",
@@ -73,7 +73,7 @@ var Users = []models.User{
 	{
 		ID:            "user-operation-manager",
 		Account:       "operation-manager",
-		DisplayName:   "运营主管",
+		DisplayName:   "张敏",
 		Password:      "manager123",
 		Token:         "mock-operation-manager-token",
 		CurrentTeamID: "team-operation",
@@ -82,7 +82,7 @@ var Users = []models.User{
 	{
 		ID:            "user-operation-employee",
 		Account:       "operation-employee",
-		DisplayName:   "运营员工",
+		DisplayName:   "李静",
 		Password:      "employee123",
 		Token:         "mock-operation-employee-token",
 		CurrentTeamID: "team-operation",

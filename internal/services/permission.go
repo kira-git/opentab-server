@@ -1,14 +1,12 @@
 package services
 
-import "opentab-server/internal/models"
+import (
+	"opentab-server/internal/models"
+	"opentab-server/internal/policies"
+)
 
 func hasPermission(user *models.User, permission string) bool {
-	for _, item := range user.Permissions {
-		if item == permission {
-			return true
-		}
-	}
-	return false
+	return policies.HasPermission(user, permission)
 }
 
 func hasAllPermissions(user *models.User, permissions []string) bool {

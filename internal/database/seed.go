@@ -2,11 +2,13 @@ package database
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"opentab-server/internal/mockdata"
 	"opentab-server/internal/models"
+	"opentab-server/internal/security"
 
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -50,16 +52,40 @@ func Seed(db *gorm.DB) error {
 
 func seedUsers(db *gorm.DB) error {
 	for _, user := range mockdata.Users {
-		record := UserRecord{
-			ID:           user.ID,
-			Account:      user.Account,
-			DisplayName:  user.DisplayName,
-			PasswordHash: user.Password,
-			GlobalRole:   user.GlobalRole,
-			Enabled:      true,
+		passwordHash, err := security.HashPassword(user.Password)
+		if err != nil {
+			return fmt.Errorf("hash seed user password %s: %w", user.ID, err)
 		}
-		if err := db.Where("id = ?", record.ID).Assign(record).FirstOrCreate(&record).Error; err != nil {
+
+		var record UserRecord
+		err = db.Where("id = ?", user.ID).First(&record).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			record = UserRecord{
+				ID:           user.ID,
+				Account:      user.Account,
+				DisplayName:  user.DisplayName,
+				PasswordHash: passwordHash,
+				GlobalRole:   user.GlobalRole,
+				Enabled:      true,
+			}
+			if err := db.Create(&record).Error; err != nil {
+				return fmt.Errorf("seed user %s: %w", user.ID, err)
+			}
+		} else if err != nil {
 			return fmt.Errorf("seed user %s: %w", user.ID, err)
+		} else {
+			updates := map[string]any{
+				"account":      user.Account,
+				"display_name": user.DisplayName,
+				"global_role":  user.GlobalRole,
+				"enabled":      true,
+			}
+			if !security.IsBcryptHash(record.PasswordHash) || record.PasswordHash == user.Password {
+				updates["password_hash"] = passwordHash
+			}
+			if err := db.Model(&UserRecord{}).Where("id = ?", user.ID).Updates(updates).Error; err != nil {
+				return fmt.Errorf("seed user %s: %w", user.ID, err)
+			}
 		}
 
 		session := AuthSessionRecord{
@@ -68,11 +94,12 @@ func seedUsers(db *gorm.DB) error {
 			Token:     user.Token,
 			ExpiresAt: seedSessionExpiresAt(),
 		}
-		if err := db.Where("token = ?", session.Token).FirstOrCreate(&session).Error; err != nil {
+		if err := db.Where("token = ?", session.Token).Assign(map[string]any{
+			"user_id":    user.ID,
+			"expires_at": seedSessionExpiresAt(),
+			"revoked_at": nil,
+		}).FirstOrCreate(&session).Error; err != nil {
 			return fmt.Errorf("seed auth session %s: %w", user.ID, err)
-		}
-		if err := db.Model(&AuthSessionRecord{}).Where("token = ? AND expires_at IS NULL", session.Token).Update("expires_at", seedSessionExpiresAt()).Error; err != nil {
-			return fmt.Errorf("backfill auth session expires_at %s: %w", user.ID, err)
 		}
 	}
 	return nil
@@ -214,17 +241,24 @@ func seedApprovalItems(db *gorm.DB) error {
 	items := []ApprovalItemRecord{
 		{
 			ID: "apv-product-001", UserID: "user-product-employee", TeamID: "team-product", Type: "leave",
-			Title: "请假申请", ApplicantID: "user-product-employee", Applicant: "产品员工", ApproverID: "user-product-manager", Approver: "产品主管",
-			Reason: "家中有事，请假一天", Summary: "请假 1 天", Status: "pending",
-			FormJSON:  datatypes.JSON([]byte(`{"leaveType":"事假","days":1}`)),
-			CreatedAt: time.Now().Add(-2 * time.Hour), UpdatedAt: time.Now().Add(-2 * time.Hour),
+			Title: "周五下午请假", ApplicantID: "user-product-employee", Applicant: "陈磊", ApproverID: "user-product-manager", Approver: "刘洋",
+			Reason: "周五下午处理个人事务，上午完成接口联调记录交接", Summary: "请假 0.5 天，已补充交接安排", Status: "pending",
+			FormJSON:  datatypes.JSON([]byte(`{"leaveType":"事假","days":0.5,"handover":"Tab 接入联调记录已同步到项目群"}`)),
+			CreatedAt: parseTimeOrNow("2026-06-03T09:20:00+08:00"), UpdatedAt: parseTimeOrNow("2026-06-03T09:20:00+08:00"),
 		},
 		{
 			ID: "apv-operation-001", UserID: "user-operation-employee", TeamID: "team-operation", Type: "expense",
-			Title: "活动物料报销", ApplicantID: "user-operation-employee", Applicant: "运营员工", ApproverID: "user-operation-manager", Approver: "运营主管",
-			Amount: 320, Reason: "线下活动物料采购", Summary: "报销 320 元", Status: "pending",
-			FormJSON:  datatypes.JSON([]byte(`{"amount":320,"category":"活动物料"}`)),
-			CreatedAt: time.Now().Add(-1 * time.Hour), UpdatedAt: time.Now().Add(-1 * time.Hour),
+			Title: "客户走访物料报销", ApplicantID: "user-operation-employee", Applicant: "李静", ApproverID: "user-operation-manager", Approver: "张敏",
+			Amount: 320, Reason: "客户走访使用的资料打印和贴纸物料", Summary: "报销 320 元，客户走访物料", Status: "pending",
+			FormJSON:  datatypes.JSON([]byte(`{"amount":320,"category":"客户走访","invoice":"已上传电子发票"}`)),
+			CreatedAt: parseTimeOrNow("2026-06-03T10:05:00+08:00"), UpdatedAt: parseTimeOrNow("2026-06-03T10:05:00+08:00"),
+		},
+		{
+			ID: "apv-product-002", UserID: "user-product-employee", TeamID: "team-product", Type: "purchase",
+			Title: "测试设备采购申请", ApplicantID: "user-product-employee", Applicant: "陈磊", ApproverID: "user-product-manager", Approver: "刘洋",
+			Amount: 1299, Reason: "用于 Android 端真机兼容性测试", Summary: "采购一台测试机，预算 1299 元", Status: "approved", Comment: "同意采购，注意登记资产编号",
+			FormJSON:  datatypes.JSON([]byte(`{"amount":1299,"category":"测试设备","assetRequired":true}`)),
+			CreatedAt: parseTimeOrNow("2026-06-02T15:40:00+08:00"), UpdatedAt: parseTimeOrNow("2026-06-02T16:10:00+08:00"),
 		},
 	}
 	for _, record := range items {
@@ -237,9 +271,11 @@ func seedApprovalItems(db *gorm.DB) error {
 
 func seedCalendarEvents(db *gorm.DB) error {
 	events := []CalendarEventRecord{
-		calendarSeedRecord("evt-product-001", "team-product", "user-product-manager", "产品主管", "产品研发部周会", "同步开放式 Tab 容器联调进展", "线上会议", []string{"产品主管", "产品员工"}, []string{"user-product-manager", "user-product-employee"}),
-		calendarSeedRecord("evt-operation-001", "team-operation", "user-operation-manager", "运营主管", "运营支持部周会", "同步运营支持和客户反馈", "会议室 A", []string{"运营主管", "运营员工"}, []string{"user-operation-manager", "user-operation-employee"}),
-		calendarSeedRecord("evt-company-001", "", "user-admin", "系统管理员", "全公司阶段同步", "开放式 Tab 容器阶段演示", "线上会议", []string{"全员"}, []string{}),
+		calendarSeedRecord("evt-product-001", "team-product", "user-product-manager", "刘洋", "产品研发部晨会", "确认 Tab 注册、权限和 AI OnCall 联调进展", "线上会议", "2026-06-03T09:30:00+08:00", "2026-06-03T10:00:00+08:00", []string{"刘洋", "陈磊"}, []string{"user-product-manager", "user-product-employee"}),
+		calendarSeedRecord("evt-operation-001", "team-operation", "user-operation-manager", "张敏", "客户反馈整理", "汇总近期客户对工作台 Tab 的反馈", "会议室 A", "2026-06-03T10:30:00+08:00", "2026-06-03T11:00:00+08:00", []string{"张敏", "李静"}, []string{"user-operation-manager", "user-operation-employee"}),
+		calendarSeedRecord("evt-product-002", "team-product", "user-product-manager", "刘洋", "Tab 容器联调复盘", "检查客户端 Tab 列表、审批和日程数据展示", "开发群语音", "2026-06-03T14:00:00+08:00", "2026-06-03T15:00:00+08:00", []string{"刘洋", "陈磊"}, []string{"user-product-manager", "user-product-employee"}),
+		calendarSeedRecord("evt-operation-002", "team-operation", "user-operation-manager", "张敏", "公告发布确认", "确认阶段演示公告内容和发布范围", "会议室 B", "2026-06-03T16:00:00+08:00", "2026-06-03T16:40:00+08:00", []string{"张敏", "李静"}, []string{"user-operation-manager", "user-operation-employee"}),
+		calendarSeedRecord("evt-company-001", "", "user-admin", "张伟", "阶段演示彩排", "开放式 Tab 容器与 AI OnCall 助理阶段演示", "线上会议", "2026-06-04T15:30:00+08:00", "2026-06-04T16:30:00+08:00", []string{"全员"}, []string{}),
 	}
 	for _, record := range events {
 		if err := db.Where("id = ?", record.ID).Assign(record).FirstOrCreate(&record).Error; err != nil {
@@ -249,7 +285,7 @@ func seedCalendarEvents(db *gorm.DB) error {
 	return nil
 }
 
-func calendarSeedRecord(id string, teamID string, creatorID string, creatorName string, title string, description string, location string, participants []string, participantIDs []string) CalendarEventRecord {
+func calendarSeedRecord(id string, teamID string, creatorID string, creatorName string, title string, description string, location string, startTime string, endTime string, participants []string, participantIDs []string) CalendarEventRecord {
 	participantsJSON, _ := json.Marshal(participants)
 	participantIDsJSON, _ := json.Marshal(participantIDs)
 	visibility := "team"
@@ -265,8 +301,8 @@ func calendarSeedRecord(id string, teamID string, creatorID string, creatorName 
 		CreatorName:        creatorName,
 		Title:              title,
 		Description:        description,
-		StartTime:          time.Now().Add(24 * time.Hour),
-		EndTime:            time.Now().Add(25 * time.Hour),
+		StartTime:          parseTimeOrNow(startTime),
+		EndTime:            parseTimeOrNow(endTime),
 		Location:           location,
 		ParticipantsJSON:   datatypes.JSON(participantsJSON),
 		ParticipantIDsJSON: datatypes.JSON(participantIDsJSON),
@@ -275,9 +311,9 @@ func calendarSeedRecord(id string, teamID string, creatorID string, creatorName 
 
 func seedAnnouncements(db *gorm.DB) error {
 	records := []AnnouncementRecord{
-		{ID: "ann-company-001", Scope: "company", Title: "全公司阶段同步", Content: "本周进行开放式 Tab 容器和 AI OnCall 阶段演示。", PublisherID: "user-admin", PublisherName: "系统管理员", Pinned: true},
-		{ID: "ann-product-001", TeamID: "team-product", Scope: "team", Title: "产品研发部周五分享", Content: "本周五 16:00 分享开放式 Tab 容器联调进展。", PublisherID: "user-product-manager", PublisherName: "产品主管"},
-		{ID: "ann-operation-001", TeamID: "team-operation", Scope: "team", Title: "运营支持部客户反馈整理", Content: "请在周五前整理客户反馈和常见问题。", PublisherID: "user-operation-manager", PublisherName: "运营主管"},
+		{ID: "ann-company-001", Scope: "company", Title: "阶段演示安排", Content: "本周四 15:30 进行开放式 Tab 容器与 AI OnCall 助理阶段演示，请相关成员提前完成数据检查。", PublisherID: "user-admin", PublisherName: "张伟", Pinned: true},
+		{ID: "ann-product-001", TeamID: "team-product", Scope: "team", Title: "产品研发部联调提醒", Content: "请在今天 14:00 前确认 Tab 列表、审批中心和日程接口在客户端展示正常。", PublisherID: "user-product-manager", PublisherName: "刘洋"},
+		{ID: "ann-operation-001", TeamID: "team-operation", Scope: "team", Title: "客户反馈整理", Content: "请在周三下班前整理客户反馈和常见问题，重点标注和工作台 Tab 相关的需求。", PublisherID: "user-operation-manager", PublisherName: "张敏"},
 	}
 	for _, record := range records {
 		if err := db.Where("id = ?", record.ID).Assign(record).FirstOrCreate(&record).Error; err != nil {
