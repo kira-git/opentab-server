@@ -17,6 +17,7 @@ type Handler struct {
 	business *services.BusinessService
 	oncall   *services.OnCallService
 	debug    *services.DebugService
+	audit    repositories.AuditRepository
 	status   RuntimeStatus
 	sseDelay time.Duration
 }
@@ -26,6 +27,10 @@ type RuntimeStatus struct {
 	DatabaseEnabled  bool
 	DatabaseType     string
 	AIServiceBaseURL string
+}
+
+type HandlerOptions struct {
+	OnCall services.OnCallOptions
 }
 
 func NewHandler() *Handler {
@@ -41,12 +46,17 @@ func NewHandlerWithRepositories(repos repositories.RepositorySet) *Handler {
 }
 
 func NewHandlerWithStatus(repos repositories.RepositorySet, status RuntimeStatus) *Handler {
+	return NewHandlerWithStatusAndOptions(repos, status, HandlerOptions{})
+}
+
+func NewHandlerWithStatusAndOptions(repos repositories.RepositorySet, status RuntimeStatus, opts HandlerOptions) *Handler {
 	return &Handler{
 		auth:     services.NewAuthService(repos.Users),
 		tabs:     services.NewTabService(repos.Tabs),
 		business: services.NewBusinessService(repos.Business),
-		oncall:   services.NewOnCallService(repos.OnCall, status.AIServiceBaseURL),
+		oncall:   services.NewOnCallServiceWithOptions(repos.OnCall, status.AIServiceBaseURL, opts.OnCall),
 		debug:    services.NewDebugService(repos.Debug),
+		audit:    repos.Audit,
 		status:   status,
 		sseDelay: 300 * time.Millisecond,
 	}
@@ -67,9 +77,19 @@ func RegisterWithStatus(router *gin.Engine, repos repositories.RepositorySet, st
 	registerWithHandler(router, handler)
 }
 
+func RegisterWithStatusAndOptions(router *gin.Engine, repos repositories.RepositorySet, status RuntimeStatus, opts HandlerOptions) {
+	handler := NewHandlerWithStatusAndOptions(repos, status, opts)
+	registerWithHandler(router, handler)
+}
+
 func registerWithHandler(router *gin.Engine, handler *Handler) {
+	router.Use(middleware.RequestID())
+	router.Use(middleware.Audit(handler.audit))
+
 	router.GET("/health", handler.health)
-	router.POST("/api/chat/stream", handler.streamAIChat)
+	if handler.status.AppMode != "postgres" {
+		router.POST("/api/chat/stream", handler.streamAIChat)
+	}
 
 	auth := router.Group("/auth")
 	{
@@ -82,6 +102,9 @@ func registerWithHandler(router *gin.Engine, handler *Handler) {
 	authorized.Use(middleware.Auth(handler.auth))
 
 	authorized.GET("/me", handler.me)
+	if handler.status.AppMode == "postgres" {
+		authorized.POST("/api/chat/stream", handler.streamAIChat)
+	}
 
 	authorized.GET("/tabs", handler.listTabs)
 	authorized.POST("/tabs", handler.createCustomTab)
@@ -149,6 +172,7 @@ func registerWithHandler(router *gin.Engine, handler *Handler) {
 	authorized.POST("/oncall/sessions/:sessionId/messages", handler.addOnCallMessage)
 	authorized.GET("/oncall/sessions/:sessionId/messages", handler.listOnCallMessages)
 	authorized.GET("/oncall/sessions/:sessionId/stream", handler.streamOnCallSession)
+	authorized.POST("/oncall/sessions/:sessionId/cancel", handler.cancelOnCallGeneration)
 	authorized.DELETE("/oncall/sessions/:sessionId", handler.deleteOnCallSession)
 }
 

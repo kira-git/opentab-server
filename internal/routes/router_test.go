@@ -78,6 +78,44 @@ func TestLoginSuccess(t *testing.T) {
 	}
 }
 
+func TestAIChatStreamRequiresAuthInPostgresMode(t *testing.T) {
+	router := setupStatusTestRouter(RuntimeStatus{
+		AppMode:         "postgres",
+		DatabaseEnabled: true,
+		DatabaseType:    "postgres",
+	})
+
+	recorder := performRequest(router, http.MethodPost, "/api/chat/stream", "", `{"message":"hello"}`)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestAuditLogRecordsLogin(t *testing.T) {
+	router := setupTestRouter()
+
+	recorder := performRequest(router, http.MethodPost, "/auth/login", "", `{"account":"opentab-demo","password":"demo123"}`)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	logs := repositories.MemoryAuditLogs()
+	if len(logs) == 0 {
+		t.Fatalf("expected audit log")
+	}
+	last := logs[len(logs)-1]
+	if last.Action != "auth.login" {
+		t.Fatalf("expected auth.login audit action, got %q", last.Action)
+	}
+	if last.UserID != "user-demo" || last.Account != "opentab-demo" {
+		t.Fatalf("unexpected audit user: %+v", last)
+	}
+	if last.RequestID == "" {
+		t.Fatalf("expected audit request id")
+	}
+}
+
 func TestLoginFailed(t *testing.T) {
 	router := setupTestRouter()
 
@@ -430,6 +468,32 @@ func TestOnCallSessionFlow(t *testing.T) {
 	listRecorder := performRequest(router, http.MethodGet, "/oncall/sessions/"+session.SessionID+"/messages", "mock-access-token", "")
 	if listRecorder.Code != http.StatusOK {
 		t.Fatalf("expected list messages status 200, got %d: %s", listRecorder.Code, listRecorder.Body.String())
+	}
+	messages := decodeJSON[[]models.OnCallMessage](t, listRecorder.Body)
+	if len(messages) != 2 {
+		t.Fatalf("expected user message and one assistant reply, got %d: %+v", len(messages), messages)
+	}
+
+	repeatedStreamRecorder := performRequest(router, http.MethodGet, "/oncall/sessions/"+session.SessionID+"/stream?messageId="+message.MessageID, "mock-access-token", "")
+	if repeatedStreamRecorder.Code != http.StatusOK {
+		t.Fatalf("expected repeated session stream status 200, got %d: %s", repeatedStreamRecorder.Code, repeatedStreamRecorder.Body.String())
+	}
+	repeatedListRecorder := performRequest(router, http.MethodGet, "/oncall/sessions/"+session.SessionID+"/messages", "mock-access-token", "")
+	if repeatedListRecorder.Code != http.StatusOK {
+		t.Fatalf("expected repeated list messages status 200, got %d: %s", repeatedListRecorder.Code, repeatedListRecorder.Body.String())
+	}
+	repeatedMessages := decodeJSON[[]models.OnCallMessage](t, repeatedListRecorder.Body)
+	if len(repeatedMessages) != 2 {
+		t.Fatalf("expected repeated stream not to create duplicate assistant reply, got %d: %+v", len(repeatedMessages), repeatedMessages)
+	}
+
+	cancelRecorder := performRequest(router, http.MethodPost, "/oncall/sessions/"+session.SessionID+"/cancel", "mock-access-token", "")
+	if cancelRecorder.Code != http.StatusOK {
+		t.Fatalf("expected cancel generation status 200, got %d: %s", cancelRecorder.Code, cancelRecorder.Body.String())
+	}
+	cancel := decodeJSON[models.CancelOnCallGenerationResponse](t, cancelRecorder.Body)
+	if !cancel.Success || cancel.SessionID != session.SessionID {
+		t.Fatalf("unexpected cancel response: %+v", cancel)
 	}
 
 	deleteRecorder := performRequest(router, http.MethodDelete, "/oncall/sessions/"+session.SessionID, "mock-access-token", "")

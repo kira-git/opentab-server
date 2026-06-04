@@ -8,6 +8,7 @@ type RepositorySet struct {
 	Business BusinessRepository
 	OnCall   OnCallRepository
 	Debug    DebugRepository
+	Audit    AuditRepository
 }
 
 func NewMemoryRepositorySet() RepositorySet {
@@ -17,6 +18,7 @@ func NewMemoryRepositorySet() RepositorySet {
 		Business: NewMemoryBusinessRepository(),
 		OnCall:   NewMemoryOnCallRepository(),
 		Debug:    NewMemoryDebugRepository(),
+		Audit:    NewMemoryAuditRepository(),
 	}
 }
 
@@ -27,5 +29,6 @@ func NewPostgresRepositorySet(db *gorm.DB) RepositorySet {
 		Business: NewPostgresBusinessRepository(db),
 		OnCall:   NewPostgresOnCallRepository(db),
 		Debug:    NewPostgresDebugRepository(db),
+		Audit:    NewPostgresAuditRepository(db),
 	}
 }

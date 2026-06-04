@@ -209,3 +209,24 @@ type AnnouncementRecord struct {
 func (AnnouncementRecord) TableName() string {
 	return "announcements"
 }
+
+type AuditLogRecord struct {
+	ID         string    `gorm:"primaryKey;size:64"`
+	RequestID  string    `gorm:"index;size:64;not null"`
+	UserID     string    `gorm:"index:idx_audit_user_created,priority:1;size:64"`
+	Account    string    `gorm:"size:64"`
+	Action     string    `gorm:"index;size:64;not null"`
+	Method     string    `gorm:"size:16;not null"`
+	Path       string    `gorm:"index;size:255;not null"`
+	StatusCode int       `gorm:"index;not null"`
+	Result     string    `gorm:"index;size:32;not null"`
+	ErrorCode  string    `gorm:"size:64"`
+	ClientIP   string    `gorm:"size:64"`
+	UserAgent  string    `gorm:"type:text"`
+	DurationMS int64     `gorm:"not null"`
+	CreatedAt  time.Time `gorm:"index:idx_audit_user_created,priority:2"`
+}
+
+func (AuditLogRecord) TableName() string {
+	return "audit_logs"
+}

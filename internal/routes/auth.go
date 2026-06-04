@@ -23,6 +23,7 @@ func (h *Handler) login(c *gin.Context) {
 		return
 	}
 
+	middleware.SetAuditUser(c, resp.UserID, req.Account)
 	response.OK(c, http.StatusOK, resp)
 }
 
@@ -39,6 +40,7 @@ func (h *Handler) register(c *gin.Context) {
 		return
 	}
 
+	middleware.SetAuditUser(c, resp.UserID, req.Account)
 	response.OK(c, http.StatusOK, resp)
 }
 

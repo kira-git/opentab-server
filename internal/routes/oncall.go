@@ -29,11 +29,10 @@ func (h *Handler) streamAIChat(c *gin.Context) {
 	}
 
 	writeSSEHeaders(c)
-	if err := h.oncall.StreamAIChat(c.Request.Context(), req.Message, req.ConversationID, func(event services.OnCallEvent) error {
-		writeEvent(c, event)
-		return nil
+	if err := h.oncall.StreamAIChatForUser(c.Request.Context(), middleware.CurrentUser(c), req.Message, req.ConversationID, func(event services.OnCallEvent) error {
+		return writeEvent(c, event)
 	}); err != nil {
-		writeEvent(c, services.OnCallEvent{
+		_ = writeEvent(c, services.OnCallEvent{
 			Event: "message",
 			Data:  `{"type":"error","code":"AI_SERVICE_ERROR","delta":"AI 服务调用失败"}`,
 		})
@@ -43,10 +42,9 @@ func (h *Handler) streamAIChat(c *gin.Context) {
 func (h *Handler) streamOnCall(c *gin.Context) {
 	writeSSEHeaders(c)
 	if err := h.oncall.StreamOnCallQuery(c.Request.Context(), c.Query("message"), func(event services.OnCallEvent) error {
-		writeEvent(c, event)
-		return nil
+		return writeEvent(c, event)
 	}); err != nil {
-		writeEvent(c, services.OnCallEvent{
+		_ = writeEvent(c, services.OnCallEvent{
 			Event: "error",
 			Data:  `{"code":"AI_SERVICE_ERROR","message":"AI 服务调用失败"}`,
 		})
@@ -92,15 +90,20 @@ func (h *Handler) streamOnCallSession(c *gin.Context) {
 	user := middleware.CurrentUser(c)
 	writeSSEHeaders(c)
 	appErr := h.oncall.StreamOnCallMessage(c.Request.Context(), user, c.Param("sessionId"), c.Query("messageId"), func(event services.OnCallEvent) error {
-		writeEvent(c, event)
-		return nil
+		return writeEvent(c, event)
 	})
 	if appErr != nil {
-		writeEvent(c, services.OnCallEvent{
+		_ = writeEvent(c, services.OnCallEvent{
 			Event: "error",
 			Data:  fmt.Sprintf(`{"code":"%s","message":"%s"}`, appErr.Code, appErr.Message),
 		})
 	}
+}
+
+func (h *Handler) cancelOnCallGeneration(c *gin.Context) {
+	user := middleware.CurrentUser(c)
+	resp, appErr := h.oncall.CancelSessionGeneration(user, c.Param("sessionId"))
+	writeServiceResult(c, resp, appErr)
 }
 
 func (h *Handler) deleteOnCallSession(c *gin.Context) {
@@ -109,10 +112,23 @@ func (h *Handler) deleteOnCallSession(c *gin.Context) {
 	writeServiceResult(c, resp, appErr)
 }
 
-func writeEvent(c *gin.Context, event services.OnCallEvent) {
-	fmt.Fprintf(c.Writer, "event: %s\n", event.Event)
-	fmt.Fprintf(c.Writer, "data: %s\n\n", event.Data)
-	c.Writer.Flush()
+func writeEvent(c *gin.Context, event services.OnCallEvent) error {
+	var err error
+	if event.Event == "heartbeat" {
+		_, err = fmt.Fprintf(c.Writer, ": heartbeat %s\n\n", event.Data)
+	} else {
+		_, err = fmt.Fprintf(c.Writer, "event: %s\n", event.Event)
+		if err == nil {
+			_, err = fmt.Fprintf(c.Writer, "data: %s\n\n", event.Data)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if flusher, ok := c.Writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return nil
 }
 
 func writeSSEHeaders(c *gin.Context) {

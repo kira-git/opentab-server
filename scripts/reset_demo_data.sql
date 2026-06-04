@@ -43,6 +43,7 @@ DELETE FROM oncall_messages
 WHERE session_id IN (
   SELECT id FROM oncall_sessions WHERE user_id NOT IN (SELECT id FROM seed_user_ids)
 );
+DELETE FROM audit_logs;
 DELETE FROM oncall_sessions WHERE user_id NOT IN (SELECT id FROM seed_user_ids);
 DELETE FROM auth_sessions WHERE user_id NOT IN (SELECT id FROM seed_user_ids);
 DELETE FROM user_permissions WHERE user_id NOT IN (SELECT id FROM seed_user_ids);

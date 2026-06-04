@@ -30,3 +30,9 @@ type DeleteOnCallSessionResponse struct {
 	Success   bool   `json:"success"`
 	SessionID string `json:"sessionId"`
 }
+
+type CancelOnCallGenerationResponse struct {
+	Success   bool   `json:"success"`
+	SessionID string `json:"sessionId"`
+	Cancelled bool   `json:"cancelled"`
+}
