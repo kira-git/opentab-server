@@ -53,6 +53,10 @@ DELETE FROM calendar_events WHERE id NOT IN (SELECT id FROM seed_event_ids);
 DELETE FROM announcements WHERE id NOT IN (SELECT id FROM seed_announcement_ids);
 DELETE FROM team_members WHERE user_id NOT IN (SELECT id FROM seed_user_ids)
   OR team_id NOT IN (SELECT id FROM seed_team_ids);
+DELETE FROM tab_visibility_targets
+WHERE tab_id IN (
+  SELECT id FROM tabs WHERE is_system = false OR owner_user_id IS NOT NULL
+);
 DELETE FROM tabs WHERE is_system = false OR owner_user_id IS NOT NULL;
 DELETE FROM teams WHERE id NOT IN (SELECT id FROM seed_team_ids);
 DELETE FROM users WHERE id NOT IN (SELECT id FROM seed_user_ids);

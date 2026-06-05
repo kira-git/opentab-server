@@ -51,6 +51,8 @@ func tabRecordToManifest(record database.TabRecord, enabled bool, sortOrder int)
 		extension = &parsed
 	}
 
+	visibility := &models.TabVisibility{Scope: defaultVisibilityScope(record.VisibilityScope), DefaultEnabled: record.DefaultEnabled}
+
 	return models.TabManifest{
 		ID:                  record.ID,
 		DisplayName:         record.DisplayName,
@@ -66,6 +68,7 @@ func tabRecordToManifest(record database.TabRecord, enabled bool, sortOrder int)
 		SortOrder:           sortOrder,
 		Extension:           extension,
 		ExtraConfig:         []byte(record.ExtraConfigJSON),
+		Visibility:          visibility,
 	}, nil
 }
 
@@ -92,6 +95,8 @@ func manifestToTabRecord(tab models.TabManifest, userID string, isSystem bool) (
 	return database.TabRecord{
 		ID:                  tab.ID,
 		OwnerUserID:         owner,
+		VisibilityScope:     defaultRecordVisibilityScope(isSystem),
+		DefaultEnabled:      true,
 		DisplayName:         tab.DisplayName,
 		Description:         tab.Description,
 		Icon:                tab.Icon,
@@ -107,6 +112,20 @@ func manifestToTabRecord(tab models.TabManifest, userID string, isSystem bool) (
 		ExtraConfigJSON:     datatypes.JSON(tab.ExtraConfig),
 		IsSystem:            isSystem,
 	}, nil
+}
+
+func defaultVisibilityScope(scope string) string {
+	if scope == "" {
+		return "self"
+	}
+	return scope
+}
+
+func defaultRecordVisibilityScope(isSystem bool) string {
+	if isSystem {
+		return "company"
+	}
+	return "self"
 }
 
 func formatTime(value time.Time) string {

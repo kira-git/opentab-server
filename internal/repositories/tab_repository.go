@@ -4,11 +4,12 @@ import "opentab-server/internal/models"
 
 type TabRepository interface {
 	ListAll() ([]models.TabManifest, error)
-	ListByUser(userID string) ([]models.TabManifest, error)
-	ListCatalog(userID string) ([]models.TabManifest, error)
+	ListByUser(user *models.User) ([]models.TabManifest, error)
+	ListCatalog(user *models.User) ([]models.TabManifest, error)
 	FindByID(tabID string) (*models.TabManifest, error)
-	CreateCustom(userID string, tab models.TabManifest) (*models.TabManifest, error)
-	UpdateCustom(userID string, tabID string, req models.UpdateCustomTabRequest) (*models.TabManifest, error)
+	FindVisibleByID(user *models.User, tabID string) (*models.TabManifest, error)
+	CreateCustom(user *models.User, tab models.TabManifest, visibility models.TabVisibility) (*models.TabManifest, error)
+	UpdateCustom(user *models.User, tabID string, req models.UpdateCustomTabRequest, visibility *models.TabVisibility) (*models.TabManifest, error)
 	DeleteCustom(userID string, tabID string) error
 	RouteExistsForUser(userID string, route string, excludeTabID string) bool
 	Reorder(userID string, items []models.ReorderTabItem) error

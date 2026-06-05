@@ -50,6 +50,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&PermissionRecord{},
 		&UserPermissionRecord{},
 		&TabRecord{},
+		&TabVisibilityTargetRecord{},
 		&UserTabRecord{},
 		&OnCallSessionRecord{},
 		&OnCallMessageRecord{},

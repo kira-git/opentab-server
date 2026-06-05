@@ -17,6 +17,7 @@ type TabManifest struct {
 	SortOrder           int             `json:"sortOrder,omitempty"`
 	Extension           *TabExtension   `json:"extension,omitempty"`
 	ExtraConfig         json.RawMessage `json:"extraConfig,omitempty"`
+	Visibility          *TabVisibility  `json:"visibility,omitempty"`
 }
 
 type SemanticVersion struct {
@@ -62,14 +63,16 @@ type TabMutationResponse struct {
 }
 
 type CreateCustomTabRequest struct {
-	ID                  string `json:"id"`
-	DisplayName         string `json:"displayName"`
-	Description         string `json:"description,omitempty"`
-	Icon                string `json:"icon"`
-	Route               string `json:"route"`
-	EntryType           string `json:"entryType"`
-	EntryURI            string `json:"entryUri"`
-	MinContainerVersion int    `json:"minContainerVersion"`
+	ID                  string                `json:"id"`
+	DisplayName         string                `json:"displayName"`
+	Description         string                `json:"description,omitempty"`
+	Icon                string                `json:"icon"`
+	Route               string                `json:"route"`
+	EntryType           string                `json:"entryType"`
+	EntryURI            string                `json:"entryUri"`
+	MinContainerVersion int                   `json:"minContainerVersion"`
+	SortOrder           int                   `json:"sortOrder,omitempty"`
+	Visibility          *TabVisibilityRequest `json:"visibility,omitempty"`
 }
 
 type CustomTabResponse struct {
@@ -79,11 +82,26 @@ type CustomTabResponse struct {
 }
 
 type UpdateCustomTabRequest struct {
-	DisplayName string `json:"displayName"`
-	Description string `json:"description,omitempty"`
-	Icon        string `json:"icon"`
-	EntryURI    string `json:"entryUri"`
-	SortOrder   int    `json:"sortOrder,omitempty"`
+	DisplayName string                `json:"displayName"`
+	Description string                `json:"description,omitempty"`
+	Icon        string                `json:"icon"`
+	EntryURI    string                `json:"entryUri"`
+	SortOrder   int                   `json:"sortOrder,omitempty"`
+	Visibility  *TabVisibilityRequest `json:"visibility,omitempty"`
+}
+
+type TabVisibility struct {
+	Scope          string   `json:"scope"`
+	TeamIDs        []string `json:"teamIds"`
+	UserIDs        []string `json:"userIds"`
+	DefaultEnabled bool     `json:"defaultEnabled"`
+}
+
+type TabVisibilityRequest struct {
+	Scope          string   `json:"scope"`
+	TeamIDs        []string `json:"teamIds"`
+	UserIDs        []string `json:"userIds"`
+	DefaultEnabled *bool    `json:"defaultEnabled,omitempty"`
 }
 
 type ReorderTabsRequest struct {

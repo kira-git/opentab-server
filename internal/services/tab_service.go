@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"opentab-server/internal/models"
+	"opentab-server/internal/policies"
 	"opentab-server/internal/repositories"
 )
 
@@ -18,7 +19,7 @@ func NewTabService(tabs repositories.TabRepository) *TabService {
 }
 
 func (s *TabService) ListUserTabs(user *models.User) ([]models.TabManifest, *AppError) {
-	tabs, err := s.tabs.ListByUser(user.ID)
+	tabs, err := s.tabs.ListByUser(user)
 	if err != nil {
 		return nil, NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "获取 Tab 列表失败")
 	}
@@ -26,7 +27,7 @@ func (s *TabService) ListUserTabs(user *models.User) ([]models.TabManifest, *App
 }
 
 func (s *TabService) ListCatalog(user *models.User) ([]models.TabManifest, *AppError) {
-	tabs, err := s.tabs.ListCatalog(user.ID)
+	tabs, err := s.tabs.ListCatalog(user)
 	if err != nil {
 		return nil, NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "获取 Tab 目录失败")
 	}
@@ -42,16 +43,14 @@ func (s *TabService) ListAll() ([]models.TabManifest, *AppError) {
 }
 
 func (s *TabService) GetTab(user *models.User, tabID string) (*models.TabManifest, *AppError) {
-	tabs, err := s.tabs.ListByUser(user.ID)
+	tab, err := s.tabs.FindVisibleByID(user, tabID)
+	if errors.Is(err, repositories.ErrForbidden) || errors.Is(err, repositories.ErrNotFound) {
+		return nil, NewAppError(http.StatusNotFound, "RESOURCE_NOT_FOUND", "Tab 不存在或当前账号无权访问")
+	}
 	if err != nil {
 		return nil, NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "获取 Tab 详情失败")
 	}
-	for _, tab := range tabs {
-		if tab.ID == tabID {
-			return &tab, nil
-		}
-	}
-	return nil, NewAppError(http.StatusNotFound, "RESOURCE_NOT_FOUND", "Tab 不存在或当前账号未启用")
+	return tab, nil
 }
 
 func (s *TabService) EnableTab(user *models.User, tabID string) (*models.TabMutationResponse, *AppError) {
@@ -59,14 +58,17 @@ func (s *TabService) EnableTab(user *models.User, tabID string) (*models.TabMuta
 		return nil, NewAppError(http.StatusBadRequest, "INVALID_REQUEST", "tabId 不可为空")
 	}
 
-	tab, err := s.tabs.FindByID(tabID)
+	tab, err := s.tabs.FindVisibleByID(user, tabID)
 	if errors.Is(err, repositories.ErrNotFound) {
 		return nil, NewAppError(http.StatusNotFound, "RESOURCE_NOT_FOUND", "Tab 不存在")
+	}
+	if errors.Is(err, repositories.ErrForbidden) {
+		return nil, NewAppError(http.StatusForbidden, "FORBIDDEN", "当前账号无权启用该 Tab")
 	}
 	if err != nil {
 		return nil, NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "启用 Tab 失败")
 	}
-	if !hasAllPermissions(user, tab.Permissions) {
+	if !policies.CanUseTab(user, *tab) {
 		return nil, NewAppError(http.StatusForbidden, "FORBIDDEN", "当前账号无权启用"+tab.DisplayName)
 	}
 
@@ -95,6 +97,13 @@ func (s *TabService) CreateCustomTab(user *models.User, req models.CreateCustomT
 	if s.tabs.RouteExistsForUser(user.ID, req.Route, "") {
 		return nil, NewAppError(http.StatusConflict, "RESOURCE_CONFLICT", "当前账号下 route 已存在")
 	}
+	visibility, appErr := normalizeTabVisibility(req.Visibility)
+	if appErr != nil {
+		return nil, appErr
+	}
+	if !policies.CanPublishTabVisibility(user, visibility) {
+		return nil, NewAppError(http.StatusForbidden, "FORBIDDEN", "当前账号无权发布 Tab 到指定范围")
+	}
 
 	tab := models.TabManifest{
 		ID:                  req.ID,
@@ -108,6 +117,8 @@ func (s *TabService) CreateCustomTab(user *models.User, req models.CreateCustomT
 		MinContainerVersion: req.MinContainerVersion,
 		Permissions:         []string{},
 		Enabled:             true,
+		SortOrder:           req.SortOrder,
+		Visibility:          &visibility,
 	}
 	if tab.Icon == "" {
 		tab.Icon = "web"
@@ -116,9 +127,12 @@ func (s *TabService) CreateCustomTab(user *models.User, req models.CreateCustomT
 		tab.MinContainerVersion = 1
 	}
 
-	created, err := s.tabs.CreateCustom(user.ID, tab)
+	created, err := s.tabs.CreateCustom(user, tab, visibility)
 	if errors.Is(err, repositories.ErrConflict) {
 		return nil, NewAppError(http.StatusConflict, "RESOURCE_CONFLICT", "Tab ID 已存在")
+	}
+	if errors.Is(err, repositories.ErrInvalidTarget) {
+		return nil, NewAppError(http.StatusNotFound, "TARGET_NOT_FOUND", "指定的部门或员工不存在")
 	}
 	if err != nil {
 		return nil, NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "创建自定义 Tab 失败")
@@ -131,12 +145,27 @@ func (s *TabService) UpdateCustomTab(user *models.User, tabID string, req models
 		return nil, NewAppError(http.StatusBadRequest, "INVALID_TAB_CONFIG", "entryUri 必须是 http:// 或 https:// 地址")
 	}
 
-	tab, err := s.tabs.UpdateCustom(user.ID, tabID, req)
+	var visibility *models.TabVisibility
+	if req.Visibility != nil {
+		normalized, appErr := normalizeTabVisibility(req.Visibility)
+		if appErr != nil {
+			return nil, appErr
+		}
+		if !policies.CanPublishTabVisibility(user, normalized) {
+			return nil, NewAppError(http.StatusForbidden, "FORBIDDEN", "当前账号无权发布 Tab 到指定范围")
+		}
+		visibility = &normalized
+	}
+
+	tab, err := s.tabs.UpdateCustom(user, tabID, req, visibility)
 	if errors.Is(err, repositories.ErrNotFound) {
 		return nil, NewAppError(http.StatusNotFound, "RESOURCE_NOT_FOUND", "Tab 不存在")
 	}
 	if errors.Is(err, repositories.ErrForbidden) {
 		return nil, NewAppError(http.StatusForbidden, "FORBIDDEN", "系统内置 Tab 不允许修改")
+	}
+	if errors.Is(err, repositories.ErrInvalidTarget) {
+		return nil, NewAppError(http.StatusNotFound, "TARGET_NOT_FOUND", "指定的部门或员工不存在")
 	}
 	if err != nil {
 		return nil, NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "修改自定义 Tab 失败")
@@ -181,6 +210,55 @@ func (s *TabService) DisableTab(user *models.User, tabID string) (*models.TabMut
 		return nil, NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "停用 Tab 失败")
 	}
 	return &models.TabMutationResponse{Success: true, TabID: tabID}, nil
+}
+
+func normalizeTabVisibility(req *models.TabVisibilityRequest) (models.TabVisibility, *AppError) {
+	defaultEnabled := true
+	if req == nil {
+		return models.TabVisibility{Scope: "self", DefaultEnabled: true}, nil
+	}
+	if req.DefaultEnabled != nil {
+		defaultEnabled = *req.DefaultEnabled
+	}
+	scope := strings.TrimSpace(req.Scope)
+	if scope == "" {
+		scope = "self"
+	}
+	visibility := models.TabVisibility{
+		Scope:          scope,
+		TeamIDs:        compactStrings(req.TeamIDs),
+		UserIDs:        compactStrings(req.UserIDs),
+		DefaultEnabled: defaultEnabled,
+	}
+	switch visibility.Scope {
+	case "self":
+		visibility.TeamIDs = nil
+		visibility.UserIDs = nil
+	case "company":
+		visibility.TeamIDs = nil
+		visibility.UserIDs = nil
+	case "custom":
+		if len(visibility.TeamIDs) == 0 && len(visibility.UserIDs) == 0 {
+			return models.TabVisibility{}, NewAppError(http.StatusBadRequest, "INVALID_TAB_VISIBILITY", "自定义可见范围不能为空")
+		}
+	default:
+		return models.TabVisibility{}, NewAppError(http.StatusBadRequest, "INVALID_TAB_VISIBILITY", "visibility.scope 仅支持 self、company、custom")
+	}
+	return visibility, nil
+}
+
+func compactStrings(items []string) []string {
+	seen := map[string]bool{}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		value := strings.TrimSpace(item)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
 }
 
 func (s *TabService) ValidateTab(req models.ValidateTabRequest) models.ValidateTabResponse {
@@ -237,7 +315,7 @@ func (s *TabService) ReportAction(user *models.User, tabID string, actionID stri
 	if err != nil {
 		return nil, NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "处理 Tab 动作失败")
 	}
-	if !hasAllPermissions(user, tab.Permissions) {
+	if !policies.CanUseTab(user, *tab) {
 		return nil, NewAppError(http.StatusForbidden, "FORBIDDEN", "当前账号无权操作"+tab.DisplayName)
 	}
 

@@ -282,9 +282,9 @@ func EnableTab(userID string, tabID string) {
 
 func DisableTab(userID string, tabID string) {
 	if UserTabs[userID] == nil {
-		return
+		UserTabs[userID] = map[string]bool{}
 	}
-	delete(UserTabs[userID], tabID)
+	UserTabs[userID][tabID] = false
 }
 
 func CreateCustomTab(userID string, tab models.TabManifest) models.TabManifest {

@@ -85,6 +85,9 @@ func (UserPermissionRecord) TableName() string {
 type TabRecord struct {
 	ID                  string         `gorm:"primaryKey;size:128"`
 	OwnerUserID         *string        `gorm:"index;size:64"`
+	VisibilityScope     string         `gorm:"index;size:32;not null;default:self"`
+	DefaultEnabled      bool           `gorm:"not null;default:true"`
+	ManagedByAdmin      bool           `gorm:"not null;default:false"`
 	DisplayName         string         `gorm:"size:128;not null"`
 	Description         string         `gorm:"type:text"`
 	Icon                string         `gorm:"size:64"`
@@ -107,10 +110,23 @@ func (TabRecord) TableName() string {
 	return "tabs"
 }
 
+type TabVisibilityTargetRecord struct {
+	ID         string `gorm:"primaryKey;size:64"`
+	TabID      string `gorm:"index:idx_tab_visibility_target,priority:1;size:128;not null"`
+	TargetType string `gorm:"index:idx_tab_visibility_target,priority:2;size:32;not null"`
+	TargetID   string `gorm:"index:idx_tab_visibility_target,priority:3;size:64;not null"`
+	CreatedAt  time.Time
+}
+
+func (TabVisibilityTargetRecord) TableName() string {
+	return "tab_visibility_targets"
+}
+
 type UserTabRecord struct {
 	UserID    string `gorm:"primaryKey;size:64"`
 	TabID     string `gorm:"primaryKey;size:128;index"`
 	Enabled   bool   `gorm:"not null;default:true"`
+	Source    string `gorm:"index;size:32;not null;default:self"`
 	SortOrder int    `gorm:"index;not null;default:0"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
