@@ -1,10 +1,12 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
+	"opentab-server/internal/cache"
 	"opentab-server/internal/models"
 	"opentab-server/internal/repositories"
 	"opentab-server/internal/security"
@@ -15,6 +17,7 @@ type fakeUserRepository struct {
 	createdUser         *models.User
 	updatedPasswordHash string
 	sessionToken        string
+	findByIDCalls       int
 }
 
 func (r *fakeUserRepository) FindByAccount(account string) (*models.User, error) {
@@ -22,6 +25,25 @@ func (r *fakeUserRepository) FindByAccount(account string) (*models.User, error)
 		return nil, repositories.ErrNotFound
 	}
 	return r.user, nil
+}
+
+func (r *fakeUserRepository) FindByID(userID string) (*models.User, error) {
+	r.findByIDCalls++
+	if r.user != nil && r.user.ID == userID {
+		return r.user, nil
+	}
+	if r.createdUser != nil && r.createdUser.ID == userID {
+		return r.createdUser, nil
+	}
+	return nil, repositories.ErrNotFound
+}
+
+func (r *fakeUserRepository) FindSessionByToken(token string) (*models.AuthSession, error) {
+	if r.sessionToken == token && r.user != nil {
+		expiresAt := time.Now().Add(time.Hour)
+		return &models.AuthSession{Token: token, UserID: r.user.ID, ExpiresAt: &expiresAt}, nil
+	}
+	return nil, repositories.ErrNotFound
 }
 
 func (r *fakeUserRepository) FindByToken(token string) (*models.User, error) {
@@ -133,6 +155,87 @@ type tokenErrorRepository struct {
 	fakeUserRepository
 }
 
-func (r *tokenErrorRepository) FindByToken(token string) (*models.User, error) {
+func (r *tokenErrorRepository) FindSessionByToken(token string) (*models.AuthSession, error) {
 	return nil, repositories.ErrTokenExpired
+}
+
+func TestFindUserByTokenCachesSessionAndUserContext(t *testing.T) {
+	repo := &fakeUserRepository{user: &models.User{
+		ID:          "user-1",
+		Account:     "demo",
+		DisplayName: "Demo",
+		Password:    "hash",
+		Permissions: []string{"ai.oncall"},
+		Enabled:     true,
+	}}
+	token := "token-cache-test"
+	expiresAt := time.Now().Add(time.Hour)
+	if err := repo.CreateSession(repo.user.ID, token, expiresAt); err != nil {
+		t.Fatalf("create session failed: %v", err)
+	}
+	authCache := newMemoryAuthCache()
+	service := NewAuthServiceWithCache(repo, authCache, time.Minute)
+
+	first, err := service.FindUserByToken(token)
+	if err != nil {
+		t.Fatalf("first auth failed: %v", err)
+	}
+	second, err := service.FindUserByToken(token)
+	if err != nil {
+		t.Fatalf("second auth failed: %v", err)
+	}
+	if first.ID != repo.user.ID || second.ID != repo.user.ID {
+		t.Fatalf("unexpected cached user")
+	}
+	if repo.findByIDCalls != 1 {
+		t.Fatalf("expected user context to be loaded from repository once, got %d", repo.findByIDCalls)
+	}
+}
+
+type memoryAuthCache struct {
+	sessions map[string]cache.AuthSession
+	users    map[string]models.User
+}
+
+func newMemoryAuthCache() *memoryAuthCache {
+	return &memoryAuthCache{
+		sessions: map[string]cache.AuthSession{},
+		users:    map[string]models.User{},
+	}
+}
+
+func (c *memoryAuthCache) GetSession(_ context.Context, token string) (*cache.AuthSession, error) {
+	session, ok := c.sessions[token]
+	if !ok {
+		return nil, cache.ErrMiss
+	}
+	return &session, nil
+}
+
+func (c *memoryAuthCache) SetSession(_ context.Context, token string, session cache.AuthSession, _ time.Duration) error {
+	c.sessions[token] = session
+	return nil
+}
+
+func (c *memoryAuthCache) DeleteSession(_ context.Context, token string) error {
+	delete(c.sessions, token)
+	return nil
+}
+
+func (c *memoryAuthCache) GetUserContext(_ context.Context, userID string) (*models.User, error) {
+	user, ok := c.users[userID]
+	if !ok {
+		return nil, cache.ErrMiss
+	}
+	return &user, nil
+}
+
+func (c *memoryAuthCache) SetUserContext(_ context.Context, userID string, user models.User, _ time.Duration) error {
+	c.users[userID] = user
+	return nil
+}
+
+func (c *memoryAuthCache) DeleteUserContext(_ context.Context, userID string) error {
+	delete(c.users, userID)
+	return nil
 }

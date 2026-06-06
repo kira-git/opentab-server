@@ -45,11 +45,13 @@ func (r *PostgresOnCallRepository) ListSessions(userID string) ([]models.OnCallS
 		Find(&records).Error; err != nil {
 		return nil, err
 	}
+	messageCounts, err := r.messageCountsBySessionID(records)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]models.OnCallSession, 0, len(records))
 	for _, record := range records {
-		var count int64
-		_ = r.db.Model(&database.OnCallMessageRecord{}).Where("session_id = ?", record.ID).Count(&count).Error
-		result = append(result, onCallSessionRecordToModel(record, int(count)))
+		result = append(result, onCallSessionRecordToModel(record, messageCounts[record.ID]))
 	}
 	return result, nil
 }
@@ -142,6 +144,33 @@ func onCallSessionRecordToModel(record database.OnCallSessionRecord, messageCoun
 		UpdatedAt:    formatTime(record.UpdatedAt),
 		MessageCount: messageCount,
 	}
+}
+
+func (r *PostgresOnCallRepository) messageCountsBySessionID(records []database.OnCallSessionRecord) (map[string]int, error) {
+	result := map[string]int{}
+	sessionIDs := make([]string, 0, len(records))
+	for _, record := range records {
+		sessionIDs = append(sessionIDs, record.ID)
+	}
+	if len(sessionIDs) == 0 {
+		return result, nil
+	}
+	type row struct {
+		SessionID string
+		Count     int
+	}
+	var rows []row
+	if err := r.db.Model(&database.OnCallMessageRecord{}).
+		Select("session_id, COUNT(*) AS count").
+		Where("session_id IN ?", sessionIDs).
+		Group("session_id").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		result[row.SessionID] = row.Count
+	}
+	return result, nil
 }
 
 func onCallMessageRecordToModel(record database.OnCallMessageRecord) models.OnCallMessage {

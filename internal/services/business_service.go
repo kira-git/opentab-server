@@ -1,20 +1,30 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
+	"opentab-server/internal/cache"
 	"opentab-server/internal/models"
 	"opentab-server/internal/policies"
 	"opentab-server/internal/repositories"
 )
 
 type BusinessService struct {
-	business repositories.BusinessRepository
+	business  repositories.BusinessRepository
+	authCache cache.AuthCache
 }
 
 func NewBusinessService(business repositories.BusinessRepository) *BusinessService {
-	return &BusinessService{business: business}
+	return NewBusinessServiceWithCache(business, cache.NewNoopAuthCache())
+}
+
+func NewBusinessServiceWithCache(business repositories.BusinessRepository, authCache cache.AuthCache) *BusinessService {
+	if authCache == nil {
+		authCache = cache.NewNoopAuthCache()
+	}
+	return &BusinessService{business: business, authCache: authCache}
 }
 
 func (s *BusinessService) ApprovalSummary(user *models.User) (*models.ApprovalSummary, *AppError) {
@@ -286,17 +296,24 @@ func (s *BusinessService) UpdateTeam(user *models.User, teamID string, req model
 	if req.TeamName == "" {
 		return nil, NewAppError(http.StatusBadRequest, "INVALID_REQUEST", "teamName 不可为空")
 	}
+	members := s.teamMemberUserIDs(teamID)
 	value, err := s.business.UpdateTeam(teamID, req)
-	return wrapBusinessResult(value, err, "团队不存在", "编辑团队失败")
+	if appErr := mapRepoError(err, "团队不存在", "编辑团队失败"); appErr != nil {
+		return nil, appErr
+	}
+	s.invalidateUserContexts(members...)
+	return value, nil
 }
 
 func (s *BusinessService) DisableTeam(user *models.User, teamID string) (models.SuccessResponse, *AppError) {
 	if !policies.CanManageTeam(user) {
 		return models.SuccessResponse{}, forbidden("当前账号无权停用团队")
 	}
+	members := s.teamMemberUserIDs(teamID)
 	if appErr := mapRepoError(s.business.DisableTeam(teamID), "团队不存在", "停用团队失败"); appErr != nil {
 		return models.SuccessResponse{}, appErr
 	}
+	s.invalidateUserContexts(members...)
 	return models.SuccessResponse{Success: true}, nil
 }
 
@@ -313,7 +330,11 @@ func (s *BusinessService) AddTeamMember(user *models.User, teamID string, req mo
 		return nil, forbidden("当前账号无权管理团队成员")
 	}
 	value, err := s.business.AddTeamMember(teamID, req)
-	return wrapBusinessResult(value, err, "团队或用户不存在", "添加团队成员失败")
+	if appErr := mapRepoError(err, "团队或用户不存在", "添加团队成员失败"); appErr != nil {
+		return nil, appErr
+	}
+	s.invalidateUserContexts(req.UserID)
+	return value, nil
 }
 
 func (s *BusinessService) UpdateTeamMember(user *models.User, teamID string, targetUserID string, req models.TeamMemberMutationRequest) (*models.TeamMemberMutationResponse, *AppError) {
@@ -321,7 +342,11 @@ func (s *BusinessService) UpdateTeamMember(user *models.User, teamID string, tar
 		return nil, forbidden("当前账号无权管理团队成员")
 	}
 	value, err := s.business.UpdateTeamMember(teamID, targetUserID, req)
-	return wrapBusinessResult(value, err, "团队成员不存在", "修改团队成员失败")
+	if appErr := mapRepoError(err, "团队成员不存在", "修改团队成员失败"); appErr != nil {
+		return nil, appErr
+	}
+	s.invalidateUserContexts(targetUserID)
+	return value, nil
 }
 
 func (s *BusinessService) RemoveTeamMember(user *models.User, teamID string, targetUserID string) (models.SuccessResponse, *AppError) {
@@ -331,6 +356,7 @@ func (s *BusinessService) RemoveTeamMember(user *models.User, teamID string, tar
 	if appErr := mapRepoError(s.business.RemoveTeamMember(teamID, targetUserID), "团队成员不存在", "移出团队成员失败"); appErr != nil {
 		return models.SuccessResponse{}, appErr
 	}
+	s.invalidateUserContexts(targetUserID)
 	return models.SuccessResponse{Success: true}, nil
 }
 
@@ -355,7 +381,33 @@ func (s *BusinessService) UpdateUserGlobalRole(user *models.User, targetUserID s
 		return nil, forbidden("当前账号无权修改全局角色")
 	}
 	value, err := s.business.UpdateUserGlobalRole(targetUserID, req.GlobalRole)
-	return wrapBusinessResult(value, err, "用户不存在", "修改全局角色失败")
+	if appErr := mapRepoError(err, "用户不存在", "修改全局角色失败"); appErr != nil {
+		return nil, appErr
+	}
+	s.invalidateUserContexts(targetUserID)
+	return value, nil
+}
+
+func (s *BusinessService) teamMemberUserIDs(teamID string) []string {
+	members, err := s.business.ListTeamMembers(teamID)
+	if err != nil {
+		return nil
+	}
+	userIDs := make([]string, 0, len(members))
+	for _, member := range members {
+		userIDs = append(userIDs, member.UserID)
+	}
+	return userIDs
+}
+
+func (s *BusinessService) invalidateUserContexts(userIDs ...string) {
+	ctx := context.Background()
+	for _, userID := range userIDs {
+		if userID == "" {
+			continue
+		}
+		_ = s.authCache.DeleteUserContext(ctx, userID)
+	}
 }
 
 func forbidden(message string) *AppError {

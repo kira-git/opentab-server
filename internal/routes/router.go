@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"opentab-server/internal/cache"
 	"opentab-server/internal/middleware"
 	"opentab-server/internal/repositories"
 	"opentab-server/internal/services"
@@ -27,10 +28,14 @@ type RuntimeStatus struct {
 	DatabaseEnabled  bool
 	DatabaseType     string
 	AIServiceBaseURL string
+	CacheEnabled     bool
+	CacheType        string
 }
 
 type HandlerOptions struct {
-	OnCall services.OnCallOptions
+	OnCall             services.OnCallOptions
+	AuthCache          cache.AuthCache
+	AuthUserContextTTL time.Duration
 }
 
 func NewHandler() *Handler {
@@ -50,10 +55,14 @@ func NewHandlerWithStatus(repos repositories.RepositorySet, status RuntimeStatus
 }
 
 func NewHandlerWithStatusAndOptions(repos repositories.RepositorySet, status RuntimeStatus, opts HandlerOptions) *Handler {
+	authCache := opts.AuthCache
+	if authCache == nil {
+		authCache = cache.NewNoopAuthCache()
+	}
 	return &Handler{
-		auth:     services.NewAuthService(repos.Users),
+		auth:     services.NewAuthServiceWithCache(repos.Users, authCache, opts.AuthUserContextTTL),
 		tabs:     services.NewTabService(repos.Tabs),
-		business: services.NewBusinessService(repos.Business),
+		business: services.NewBusinessServiceWithCache(repos.Business, authCache),
 		oncall:   services.NewOnCallServiceWithOptions(repos.OnCall, status.AIServiceBaseURL, opts.OnCall),
 		debug:    services.NewDebugService(repos.Debug),
 		audit:    repos.Audit,

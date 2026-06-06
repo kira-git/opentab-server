@@ -18,6 +18,8 @@ type Config struct {
 	Port                    string
 	AppMode                 string
 	DatabaseURL             string
+	RedisURL                string
+	AuthUserContextTTL      time.Duration
 	AIServiceBaseURL        string
 	AIConcurrentLimit       int
 	AIUserConcurrentLimit   int
@@ -34,6 +36,8 @@ func Load() Config {
 		Port:                    getEnv("PORT", DefaultPort),
 		AppMode:                 getEnv("APP_MODE", DefaultAppMode),
 		DatabaseURL:             os.Getenv("DATABASE_URL"),
+		RedisURL:                os.Getenv("REDIS_URL"),
+		AuthUserContextTTL:      getEnvDurationSeconds("AUTH_USER_CONTEXT_TTL_SECONDS", 5*time.Minute),
 		AIServiceBaseURL:        getEnv("AI_SERVICE_BASE_URL", DefaultAIServiceBaseURL),
 		AIConcurrentLimit:       getEnvInt("AI_CONCURRENT_LIMIT", 3),
 		AIUserConcurrentLimit:   getEnvInt("AI_USER_CONCURRENT_LIMIT", 1),
@@ -75,4 +79,16 @@ func getEnvDurationMS(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(parsed) * time.Millisecond
+}
+
+func getEnvDurationSeconds(key string, fallback time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return time.Duration(parsed) * time.Second
 }

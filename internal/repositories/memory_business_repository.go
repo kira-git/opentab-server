@@ -247,14 +247,68 @@ func (r *MemoryBusinessRepository) ListTeamMembers(teamID string) ([]models.Team
 }
 
 func (r *MemoryBusinessRepository) AddTeamMember(teamID string, req models.TeamMemberMutationRequest) (*models.TeamMemberMutationResponse, error) {
-	return &models.TeamMemberMutationResponse{Success: true, TeamID: teamID, UserID: req.UserID, TeamRole: req.TeamRole}, nil
+	if req.TeamRole != "manager" && req.TeamRole != "employee" {
+		return nil, ErrInvalidRole
+	}
+	team := memoryTeamByID(teamID)
+	if team == nil {
+		return nil, ErrNotFound
+	}
+	for i := range memoryAdminUsers {
+		if memoryAdminUsers[i].UserID != req.UserID {
+			continue
+		}
+		memoryAdminUsers[i].Memberships = []models.TeamMembership{{
+			TeamID:   teamID,
+			TeamName: team.TeamName,
+			TeamRole: req.TeamRole,
+		}}
+		return &models.TeamMemberMutationResponse{Success: true, TeamID: teamID, UserID: req.UserID, TeamRole: req.TeamRole}, nil
+	}
+	return nil, ErrNotFound
 }
 
 func (r *MemoryBusinessRepository) UpdateTeamMember(teamID string, userID string, req models.TeamMemberMutationRequest) (*models.TeamMemberMutationResponse, error) {
-	return &models.TeamMemberMutationResponse{Success: true, TeamID: teamID, UserID: userID, TeamRole: req.TeamRole}, nil
+	if req.TeamRole != "manager" && req.TeamRole != "employee" {
+		return nil, ErrInvalidRole
+	}
+	for i := range memoryAdminUsers {
+		if memoryAdminUsers[i].UserID != userID {
+			continue
+		}
+		for j := range memoryAdminUsers[i].Memberships {
+			if memoryAdminUsers[i].Memberships[j].TeamID == teamID {
+				memoryAdminUsers[i].Memberships[j].TeamRole = req.TeamRole
+				return &models.TeamMemberMutationResponse{Success: true, TeamID: teamID, UserID: userID, TeamRole: req.TeamRole}, nil
+			}
+		}
+		return nil, ErrNotFound
+	}
+	return nil, ErrNotFound
 }
 
 func (r *MemoryBusinessRepository) RemoveTeamMember(teamID string, userID string) error {
+	for i := range memoryAdminUsers {
+		if memoryAdminUsers[i].UserID != userID {
+			continue
+		}
+		for j := range memoryAdminUsers[i].Memberships {
+			if memoryAdminUsers[i].Memberships[j].TeamID == teamID {
+				memoryAdminUsers[i].Memberships = append(memoryAdminUsers[i].Memberships[:j], memoryAdminUsers[i].Memberships[j+1:]...)
+				return nil
+			}
+		}
+		return ErrNotFound
+	}
+	return ErrNotFound
+}
+
+func memoryTeamByID(teamID string) *models.TeamAdminItem {
+	for i := range memoryTeams {
+		if memoryTeams[i].TeamID == teamID && memoryTeams[i].Enabled {
+			return &memoryTeams[i]
+		}
+	}
 	return nil
 }
 

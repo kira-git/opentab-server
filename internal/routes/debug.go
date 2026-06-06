@@ -18,6 +18,10 @@ func (h *Handler) debugStatus(c *gin.Context) {
 			"enabled": h.status.DatabaseEnabled,
 			"type":    h.status.DatabaseType,
 		},
+		"cache": gin.H{
+			"enabled": h.status.CacheEnabled,
+			"type":    h.status.CacheType,
+		},
 	})
 }
 

@@ -33,7 +33,18 @@ func (r *PostgresUserRepository) FindByAccount(account string) (*models.User, er
 	return r.userWithPermissions(user)
 }
 
-func (r *PostgresUserRepository) FindByToken(token string) (*models.User, error) {
+func (r *PostgresUserRepository) FindByID(userID string) (*models.User, error) {
+	var user database.UserRecord
+	if err := r.db.Where("id = ?", userID).First(&user).Error; err != nil {
+		return nil, mapGormError(err)
+	}
+	if !user.Enabled {
+		return nil, ErrUserDisabled
+	}
+	return r.userWithPermissions(user)
+}
+
+func (r *PostgresUserRepository) FindSessionByToken(token string) (*models.AuthSession, error) {
 	var session database.AuthSessionRecord
 	if err := r.db.Where("token = ?", token).First(&session).Error; err != nil {
 		return nil, mapGormError(err)
@@ -44,15 +55,19 @@ func (r *PostgresUserRepository) FindByToken(token string) (*models.User, error)
 	if session.ExpiresAt != nil && session.ExpiresAt.Before(timeNow()) {
 		return nil, ErrTokenExpired
 	}
+	return &models.AuthSession{
+		Token:     session.Token,
+		UserID:    session.UserID,
+		ExpiresAt: session.ExpiresAt,
+	}, nil
+}
 
-	var user database.UserRecord
-	if err := r.db.Where("id = ?", session.UserID).First(&user).Error; err != nil {
-		return nil, mapGormError(err)
+func (r *PostgresUserRepository) FindByToken(token string) (*models.User, error) {
+	session, err := r.FindSessionByToken(token)
+	if err != nil {
+		return nil, err
 	}
-	if !user.Enabled {
-		return nil, ErrUserDisabled
-	}
-	result, err := r.userWithPermissions(user)
+	result, err := r.FindByID(session.UserID)
 	if err != nil {
 		return nil, err
 	}

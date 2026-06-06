@@ -32,7 +32,18 @@ func (r *MemoryUserRepository) FindByAccount(account string) (*models.User, erro
 	return user, nil
 }
 
-func (r *MemoryUserRepository) FindByToken(token string) (*models.User, error) {
+func (r *MemoryUserRepository) FindByID(userID string) (*models.User, error) {
+	user := findMemoryUserByID(userID)
+	if user == nil {
+		return nil, ErrNotFound
+	}
+	user.Token = ""
+	applyMemoryMemberships(user)
+	user.Enabled = true
+	return user, nil
+}
+
+func (r *MemoryUserRepository) FindSessionByToken(token string) (*models.AuthSession, error) {
 	seedMemoryAuthSessions()
 	session, ok := memoryAuthSessions[token]
 	if !ok {
@@ -44,13 +55,23 @@ func (r *MemoryUserRepository) FindByToken(token string) (*models.User, error) {
 	if time.Now().After(session.ExpiresAt) {
 		return nil, ErrTokenExpired
 	}
-	user := findMemoryUserByID(session.UserID)
-	if user == nil {
-		return nil, ErrNotFound
+	return &models.AuthSession{
+		Token:     token,
+		UserID:    session.UserID,
+		ExpiresAt: &session.ExpiresAt,
+	}, nil
+}
+
+func (r *MemoryUserRepository) FindByToken(token string) (*models.User, error) {
+	session, err := r.FindSessionByToken(token)
+	if err != nil {
+		return nil, err
+	}
+	user, err := r.FindByID(session.UserID)
+	if err != nil {
+		return nil, err
 	}
 	user.Token = token
-	applyMemoryMemberships(user)
-	user.Enabled = true
 	return user, nil
 }
 
@@ -131,6 +152,9 @@ func findMemoryUserByID(userID string) *models.User {
 
 func applyMemoryMemberships(user *models.User) {
 	switch user.ID {
+	case "user-admin":
+		user.CurrentTeamID = "team-product"
+		user.Memberships = []models.TeamMembership{{TeamID: "team-product", TeamName: "产品研发部", TeamRole: "manager"}}
 	case "user-product-manager":
 		user.CurrentTeamID = "team-product"
 		user.Memberships = []models.TeamMembership{{TeamID: "team-product", TeamName: "产品研发部", TeamRole: "manager"}}

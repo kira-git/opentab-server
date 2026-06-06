@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"time"
 
+	"opentab-server/internal/cache"
 	"opentab-server/internal/config"
 	"opentab-server/internal/database"
 	"opentab-server/internal/repositories"
@@ -24,6 +26,8 @@ func main() {
 		DatabaseEnabled:  false,
 		DatabaseType:     "memory",
 		AIServiceBaseURL: cfg.AIServiceBaseURL,
+		CacheEnabled:     false,
+		CacheType:        "none",
 	}
 	if cfg.DatabaseURL == "" {
 		log.Print("OpenTab server DATABASE_URL is empty")
@@ -56,7 +60,24 @@ func main() {
 		log.Printf("OpenTab server database pool configured: maxOpen=%d maxIdle=%d lifetimeMin=%d", cfg.DBMaxOpenConns, cfg.DBMaxIdleConns, cfg.DBConnMaxLifetimeMin)
 	}
 
+	var authCache cache.AuthCache = cache.NewNoopAuthCache()
+	if cfg.RedisURL == "" {
+		log.Print("OpenTab server REDIS_URL is empty, auth cache disabled")
+	} else {
+		redisCache, err := cache.NewRedisAuthCache(context.Background(), cfg.RedisURL)
+		if err != nil {
+			log.Printf("OpenTab server Redis connect failed, auth cache disabled: %v", err)
+		} else {
+			authCache = redisCache
+			runtimeStatus.CacheEnabled = true
+			runtimeStatus.CacheType = "redis"
+			log.Printf("OpenTab server Redis auth cache enabled: userContextTTL=%s", cfg.AuthUserContextTTL)
+		}
+	}
+
 	routes.RegisterWithStatusAndOptions(router, repos, runtimeStatus, routes.HandlerOptions{
+		AuthCache:          authCache,
+		AuthUserContextTTL: cfg.AuthUserContextTTL,
 		OnCall: services.OnCallOptions{
 			AIConcurrentLimit:     cfg.AIConcurrentLimit,
 			AIUserConcurrentLimit: cfg.AIUserConcurrentLimit,

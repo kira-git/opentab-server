@@ -11,6 +11,7 @@ type fakeBusinessRepository struct {
 	approval     models.ApprovalItem
 	calendar     models.CalendarEvent
 	announcement models.Announcement
+	members      []models.TeamMemberItem
 	updated      bool
 	deleted      bool
 }
@@ -123,7 +124,7 @@ func (r *fakeBusinessRepository) DisableTeam(teamID string) error {
 }
 
 func (r *fakeBusinessRepository) ListTeamMembers(teamID string) ([]models.TeamMemberItem, error) {
-	return nil, nil
+	return r.members, nil
 }
 
 func (r *fakeBusinessRepository) AddTeamMember(teamID string, req models.TeamMemberMutationRequest) (*models.TeamMemberMutationResponse, error) {
@@ -188,6 +189,43 @@ func TestBusinessServiceRejectsCompanyAnnouncementForManager(t *testing.T) {
 	}
 }
 
+func TestBusinessServiceInvalidatesUserContextAfterTeamMemberUpdate(t *testing.T) {
+	repo := &fakeBusinessRepository{}
+	authCache := newMemoryAuthCache()
+	authCache.users["user-target"] = models.User{ID: "user-target", DisplayName: "Target"}
+	service := NewBusinessServiceWithCache(repo, authCache)
+
+	_, err := service.UpdateTeamMember(adminUser(), "team-product", "user-target", models.TeamMemberMutationRequest{TeamRole: "manager"})
+	if err != nil {
+		t.Fatalf("update team member failed: %+v", err)
+	}
+	if _, ok := authCache.users["user-target"]; ok {
+		t.Fatalf("expected target user context cache to be invalidated")
+	}
+}
+
+func TestBusinessServiceInvalidatesTeamUsersAfterTeamUpdate(t *testing.T) {
+	repo := &fakeBusinessRepository{members: []models.TeamMemberItem{
+		{UserID: "user-a"},
+		{UserID: "user-b"},
+	}}
+	authCache := newMemoryAuthCache()
+	authCache.users["user-a"] = models.User{ID: "user-a"}
+	authCache.users["user-b"] = models.User{ID: "user-b"}
+	service := NewBusinessServiceWithCache(repo, authCache)
+
+	_, err := service.UpdateTeam(adminUser(), "team-product", models.TeamRequest{TeamName: "新团队"})
+	if err != nil {
+		t.Fatalf("update team failed: %+v", err)
+	}
+	if _, ok := authCache.users["user-a"]; ok {
+		t.Fatalf("expected user-a cache to be invalidated")
+	}
+	if _, ok := authCache.users["user-b"]; ok {
+		t.Fatalf("expected user-b cache to be invalidated")
+	}
+}
+
 func productManagerUser() *models.User {
 	return &models.User{
 		ID:            "user-product-manager",
@@ -206,6 +244,18 @@ func productEmployeeUser() *models.User {
 		CurrentTeamID: "team-product",
 		Memberships:   []models.TeamMembership{{TeamID: "team-product", TeamRole: "employee"}},
 		Permissions:   []string{"tab.calendar.create"},
+		Enabled:       true,
+	}
+}
+
+func adminUser() *models.User {
+	return &models.User{
+		ID:            "user-admin",
+		DisplayName:   "管理员",
+		GlobalRole:    "admin",
+		CurrentTeamID: "team-product",
+		Memberships:   []models.TeamMembership{{TeamID: "team-product", TeamRole: "manager"}},
+		Permissions:   []string{"team.manage"},
 		Enabled:       true,
 	}
 }

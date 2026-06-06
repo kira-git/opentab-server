@@ -1,5 +1,7 @@
 package models
 
+import "time"
+
 type LoginRequest struct {
 	Account  string `json:"account"`
 	Password string `json:"password"`
@@ -29,6 +31,12 @@ type User struct {
 	Memberships   []TeamMembership
 	Permissions   []string
 	Enabled       bool
+}
+
+type AuthSession struct {
+	Token     string
+	UserID    string
+	ExpiresAt *time.Time
 }
 
 type Team struct {

@@ -68,7 +68,7 @@ func (r *PostgresBusinessRepository) CreateApprovalItem(user *models.User, req m
 	if teamID == "" {
 		teamID = user.CurrentTeamID
 	}
-	approverID, approverName, err := r.firstTeamManager(teamID)
+	teamID, approverID, approverName, err := r.resolveApprovalTeamAndManager(teamID)
 	if err != nil {
 		return nil, err
 	}
@@ -296,15 +296,16 @@ func (r *PostgresBusinessRepository) ListTeams() ([]models.TeamAdminItem, error)
 	if err := r.db.Order("created_at ASC").Find(&teams).Error; err != nil {
 		return nil, err
 	}
+	stats, err := r.teamMemberStatsByTeamID(teams)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]models.TeamAdminItem, 0, len(teams))
 	for _, team := range teams {
-		var memberCount int64
-		var managerCount int64
-		r.db.Model(&database.TeamMemberRecord{}).Where("team_id = ? AND enabled = true", team.ID).Count(&memberCount)
-		r.db.Model(&database.TeamMemberRecord{}).Where("team_id = ? AND team_role = 'manager' AND enabled = true", team.ID).Count(&managerCount)
+		stat := stats[team.ID]
 		result = append(result, models.TeamAdminItem{
 			TeamID: team.ID, TeamName: team.Name, Description: team.Description,
-			MemberCount: int(memberCount), ManagerCount: int(managerCount), Enabled: team.Enabled,
+			MemberCount: stat.MemberCount, ManagerCount: stat.ManagerCount, Enabled: team.Enabled,
 			CreatedAt: formatTime(team.CreatedAt), UpdatedAt: formatTime(team.UpdatedAt),
 		})
 	}
@@ -374,7 +375,7 @@ func (r *PostgresBusinessRepository) ListTeamMembers(teamID string) ([]models.Te
 		Select("team_members.team_id, teams.name AS team_name, team_members.user_id, users.account, users.display_name, team_members.team_role, team_members.joined_at, team_members.enabled").
 		Joins("JOIN users ON users.id = team_members.user_id").
 		Joins("JOIN teams ON teams.id = team_members.team_id").
-		Where("team_members.team_id = ?", teamID).
+		Where("team_members.team_id = ? AND team_members.enabled = true", teamID).
 		Order("team_members.joined_at ASC").
 		Scan(&rows).Error; err != nil {
 		return nil, err
@@ -387,7 +388,14 @@ func (r *PostgresBusinessRepository) AddTeamMember(teamID string, req models.Tea
 		return nil, ErrInvalidRole
 	}
 	record := database.TeamMemberRecord{TeamID: teamID, UserID: req.UserID, TeamRole: req.TeamRole, Enabled: true, JoinedAt: time.Now()}
-	if err := r.db.Clauses(clause.OnConflict{UpdateAll: true}).Create(&record).Error; err != nil {
+	if err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&database.TeamMemberRecord{}).
+			Where("user_id = ? AND team_id <> ?", req.UserID, teamID).
+			Update("enabled", false).Error; err != nil {
+			return err
+		}
+		return tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&record).Error
+	}); err != nil {
 		return nil, err
 	}
 	return &models.TeamMemberMutationResponse{Success: true, TeamID: teamID, UserID: req.UserID, TeamRole: req.TeamRole}, nil
@@ -426,7 +434,7 @@ func (r *PostgresBusinessRepository) ListAdminUsers(teamID string, keyword strin
 		query = query.Where("account LIKE ? OR display_name LIKE ?", like, like)
 	}
 	if teamID != "" {
-		query = query.Joins("JOIN team_members ON team_members.user_id = users.id AND team_members.team_id = ?", teamID)
+		query = query.Joins("JOIN team_members ON team_members.user_id = users.id AND team_members.team_id = ? AND team_members.enabled = true", teamID)
 	}
 	if err := query.Find(&users).Error; err != nil {
 		return nil, err
@@ -499,9 +507,13 @@ func (r *PostgresBusinessRepository) applyCalendarVisibility(query *gorm.DB, use
 }
 
 func (r *PostgresBusinessRepository) approvalRecordsToModels(records []database.ApprovalItemRecord) ([]models.ApprovalItem, error) {
+	teamNames, err := r.teamNamesForApprovalRecords(records)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]models.ApprovalItem, 0, len(records))
 	for _, record := range records {
-		item, err := r.approvalRecordToModel(record)
+		item, err := r.approvalRecordToModelWithTeamNames(record, teamNames)
 		if err != nil {
 			return nil, err
 		}
@@ -511,12 +523,16 @@ func (r *PostgresBusinessRepository) approvalRecordsToModels(records []database.
 }
 
 func (r *PostgresBusinessRepository) approvalRecordToModel(record database.ApprovalItemRecord) (models.ApprovalItem, error) {
+	return r.approvalRecordToModelWithTeamNames(record, map[string]string{record.TeamID: r.teamName(record.TeamID)})
+}
+
+func (r *PostgresBusinessRepository) approvalRecordToModelWithTeamNames(record database.ApprovalItemRecord, teamNames map[string]string) (models.ApprovalItem, error) {
 	form := map[string]any{}
 	if len(record.FormJSON) > 0 {
 		_ = json.Unmarshal(record.FormJSON, &form)
 	}
 	return models.ApprovalItem{
-		ID: record.ID, TeamID: record.TeamID, TeamName: r.teamName(record.TeamID), Type: record.Type,
+		ID: record.ID, TeamID: record.TeamID, TeamName: teamNames[record.TeamID], Type: record.Type,
 		Title: record.Title, ApplicantID: record.ApplicantID, Applicant: record.Applicant, ApproverID: record.ApproverID, Approver: record.Approver,
 		Amount: record.Amount, Reason: record.Reason, Summary: record.Summary, Form: form,
 		Status: record.Status, CreatedAt: formatTime(record.CreatedAt), Comment: record.Comment, UpdatedAt: formatTime(record.UpdatedAt),
@@ -524,9 +540,13 @@ func (r *PostgresBusinessRepository) approvalRecordToModel(record database.Appro
 }
 
 func (r *PostgresBusinessRepository) calendarRecordsToModels(records []database.CalendarEventRecord) ([]models.CalendarEvent, error) {
+	teamNames, err := r.teamNamesForCalendarRecords(records)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]models.CalendarEvent, 0, len(records))
 	for _, record := range records {
-		event, err := r.calendarRecordToModel(record)
+		event, err := r.calendarRecordToModelWithTeamNames(record, teamNames)
 		if err != nil {
 			return nil, err
 		}
@@ -536,12 +556,16 @@ func (r *PostgresBusinessRepository) calendarRecordsToModels(records []database.
 }
 
 func (r *PostgresBusinessRepository) calendarRecordToModel(record database.CalendarEventRecord) (models.CalendarEvent, error) {
+	return r.calendarRecordToModelWithTeamNames(record, map[string]string{record.TeamID: r.teamName(record.TeamID)})
+}
+
+func (r *PostgresBusinessRepository) calendarRecordToModelWithTeamNames(record database.CalendarEventRecord, teamNames map[string]string) (models.CalendarEvent, error) {
 	participants := []string{}
 	participantIDs := []string{}
 	_ = json.Unmarshal(record.ParticipantsJSON, &participants)
 	_ = json.Unmarshal(record.ParticipantIDsJSON, &participantIDs)
 	return models.CalendarEvent{
-		ID: record.ID, TeamID: record.TeamID, TeamName: r.teamName(record.TeamID), Visibility: record.Visibility,
+		ID: record.ID, TeamID: record.TeamID, TeamName: teamNames[record.TeamID], Visibility: record.Visibility,
 		CreatorID: record.CreatorID, CreatorName: record.CreatorName,
 		Title: record.Title, Description: record.Description, StartTime: formatTime(record.StartTime), EndTime: formatTime(record.EndTime),
 		Location: record.Location, Participants: participants, ParticipantIDs: participantIDs, UpdatedAt: formatTime(record.UpdatedAt),
@@ -549,9 +573,13 @@ func (r *PostgresBusinessRepository) calendarRecordToModel(record database.Calen
 }
 
 func (r *PostgresBusinessRepository) announcementRecordsToModels(records []database.AnnouncementRecord) ([]models.Announcement, error) {
+	teamNames, err := r.teamNamesForAnnouncementRecords(records)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]models.Announcement, 0, len(records))
 	for _, record := range records {
-		item, err := r.announcementRecordToModel(record)
+		item, err := r.announcementRecordToModelWithTeamNames(record, teamNames)
 		if err != nil {
 			return nil, err
 		}
@@ -561,8 +589,12 @@ func (r *PostgresBusinessRepository) announcementRecordsToModels(records []datab
 }
 
 func (r *PostgresBusinessRepository) announcementRecordToModel(record database.AnnouncementRecord) (models.Announcement, error) {
+	return r.announcementRecordToModelWithTeamNames(record, map[string]string{record.TeamID: r.teamName(record.TeamID)})
+}
+
+func (r *PostgresBusinessRepository) announcementRecordToModelWithTeamNames(record database.AnnouncementRecord, teamNames map[string]string) (models.Announcement, error) {
 	return models.Announcement{
-		ID: record.ID, TeamID: record.TeamID, TeamName: r.teamName(record.TeamID), Scope: record.Scope, Title: record.Title, Content: record.Content,
+		ID: record.ID, TeamID: record.TeamID, TeamName: teamNames[record.TeamID], Scope: record.Scope, Title: record.Title, Content: record.Content,
 		PublisherID: record.PublisherID, PublisherName: record.PublisherName, Pinned: record.Pinned,
 		CreatedAt: formatTime(record.CreatedAt), UpdatedAt: formatTime(record.UpdatedAt),
 	}, nil
@@ -579,21 +611,27 @@ func calendarRequestToRecord(user *models.User, id string, teamID string, visibi
 	}
 }
 
-func (r *PostgresBusinessRepository) firstTeamManager(teamID string) (string, string, error) {
+func (r *PostgresBusinessRepository) resolveApprovalTeamAndManager(teamID string) (string, string, string, error) {
 	var row struct {
+		TeamID      string
 		UserID      string
 		DisplayName string
 	}
-	if err := r.db.Table("team_members").Select("team_members.user_id, users.display_name").
+	query := r.db.Table("team_members").Select("team_members.team_id, team_members.user_id, users.display_name").
 		Joins("JOIN users ON users.id = team_members.user_id").
-		Where("team_members.team_id = ? AND team_members.team_role = 'manager' AND team_members.enabled = true", teamID).
-		Limit(1).Scan(&row).Error; err != nil {
-		return "", "", err
+		Joins("JOIN teams ON teams.id = team_members.team_id").
+		Where("team_members.team_role = 'manager' AND team_members.enabled = true AND teams.enabled = true").
+		Order("team_members.joined_at ASC")
+	if teamID != "" {
+		query = query.Where("team_members.team_id = ?", teamID)
+	}
+	if err := query.Limit(1).Scan(&row).Error; err != nil {
+		return "", "", "", err
 	}
 	if row.UserID == "" {
-		return "", "", ErrNotFound
+		return "", "", "", ErrNotFound
 	}
-	return row.UserID, row.DisplayName, nil
+	return row.TeamID, row.UserID, row.DisplayName, nil
 }
 
 func (r *PostgresBusinessRepository) teamName(teamID string) string {
@@ -605,6 +643,85 @@ func (r *PostgresBusinessRepository) teamName(teamID string) string {
 		return ""
 	}
 	return team.Name
+}
+
+type teamMemberStat struct {
+	MemberCount  int
+	ManagerCount int
+}
+
+func (r *PostgresBusinessRepository) teamMemberStatsByTeamID(teams []database.TeamRecord) (map[string]teamMemberStat, error) {
+	result := map[string]teamMemberStat{}
+	teamIDs := make([]string, 0, len(teams))
+	for _, team := range teams {
+		teamIDs = append(teamIDs, team.ID)
+	}
+	if len(teamIDs) == 0 {
+		return result, nil
+	}
+	type row struct {
+		TeamID       string
+		MemberCount  int
+		ManagerCount int
+	}
+	var rows []row
+	if err := r.db.Model(&database.TeamMemberRecord{}).
+		Select("team_id, COUNT(*) AS member_count, SUM(CASE WHEN team_role = 'manager' THEN 1 ELSE 0 END) AS manager_count").
+		Where("team_id IN ? AND enabled = true", teamIDs).
+		Group("team_id").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		result[row.TeamID] = teamMemberStat{MemberCount: row.MemberCount, ManagerCount: row.ManagerCount}
+	}
+	return result, nil
+}
+
+func (r *PostgresBusinessRepository) teamNamesByID(teamIDs []string) (map[string]string, error) {
+	result := map[string]string{}
+	teamIDs = uniqueStrings(teamIDs)
+	if len(teamIDs) == 0 {
+		return result, nil
+	}
+	var teams []database.TeamRecord
+	if err := r.db.Where("id IN ?", teamIDs).Find(&teams).Error; err != nil {
+		return nil, err
+	}
+	for _, team := range teams {
+		result[team.ID] = team.Name
+	}
+	return result, nil
+}
+
+func (r *PostgresBusinessRepository) teamNamesForApprovalRecords(records []database.ApprovalItemRecord) (map[string]string, error) {
+	teamIDs := make([]string, 0, len(records))
+	for _, record := range records {
+		if record.TeamID != "" {
+			teamIDs = append(teamIDs, record.TeamID)
+		}
+	}
+	return r.teamNamesByID(teamIDs)
+}
+
+func (r *PostgresBusinessRepository) teamNamesForCalendarRecords(records []database.CalendarEventRecord) (map[string]string, error) {
+	teamIDs := make([]string, 0, len(records))
+	for _, record := range records {
+		if record.TeamID != "" {
+			teamIDs = append(teamIDs, record.TeamID)
+		}
+	}
+	return r.teamNamesByID(teamIDs)
+}
+
+func (r *PostgresBusinessRepository) teamNamesForAnnouncementRecords(records []database.AnnouncementRecord) (map[string]string, error) {
+	teamIDs := make([]string, 0, len(records))
+	for _, record := range records {
+		if record.TeamID != "" {
+			teamIDs = append(teamIDs, record.TeamID)
+		}
+	}
+	return r.teamNamesByID(teamIDs)
 }
 
 type teamMemberRow struct {
@@ -631,33 +748,41 @@ func teamMemberRowsToModels(rows []teamMemberRow) []models.TeamMemberItem {
 }
 
 func (r *PostgresBusinessRepository) userRecordsToAdminItems(users []database.UserRecord) ([]models.AdminUserItem, error) {
+	membershipsByUserID, err := r.membershipsByUserID(users)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]models.AdminUserItem, 0, len(users))
 	for _, user := range users {
-		memberships, err := r.membershipsForUser(user.ID)
-		if err != nil {
-			return nil, err
-		}
 		var globalRole *string
 		if user.GlobalRole != "" {
 			globalRole = &user.GlobalRole
 		}
-		result = append(result, models.AdminUserItem{UserID: user.ID, Account: user.Account, DisplayName: user.DisplayName, GlobalRole: globalRole, Memberships: memberships, Enabled: user.Enabled})
+		result = append(result, models.AdminUserItem{UserID: user.ID, Account: user.Account, DisplayName: user.DisplayName, GlobalRole: globalRole, Memberships: membershipsByUserID[user.ID], Enabled: user.Enabled})
 	}
 	return result, nil
 }
 
-func (r *PostgresBusinessRepository) membershipsForUser(userID string) ([]models.TeamMembership, error) {
+func (r *PostgresBusinessRepository) membershipsByUserID(users []database.UserRecord) (map[string][]models.TeamMembership, error) {
+	result := map[string][]models.TeamMembership{}
+	userIDs := make([]string, 0, len(users))
+	for _, user := range users {
+		userIDs = append(userIDs, user.ID)
+	}
+	if len(userIDs) == 0 {
+		return result, nil
+	}
 	var rows []teamMemberRow
 	if err := r.db.Table("team_members").
-		Select("team_members.team_id, teams.name AS team_name, team_members.team_role").
+		Select("team_members.user_id, team_members.team_id, teams.name AS team_name, team_members.team_role").
 		Joins("JOIN teams ON teams.id = team_members.team_id").
-		Where("team_members.user_id = ? AND team_members.enabled = true", userID).
+		Where("team_members.user_id IN ? AND team_members.enabled = true", userIDs).
+		Order("team_members.joined_at ASC").
 		Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	result := make([]models.TeamMembership, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, models.TeamMembership{TeamID: row.TeamID, TeamName: row.TeamName, TeamRole: row.TeamRole})
+		result[row.UserID] = append(result[row.UserID], models.TeamMembership{TeamID: row.TeamID, TeamName: row.TeamName, TeamRole: row.TeamRole})
 	}
 	return result, nil
 }

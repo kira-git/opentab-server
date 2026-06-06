@@ -121,6 +121,7 @@ func seedTeams(db *gorm.DB) error {
 func seedTeamMembers(db *gorm.DB) error {
 	now := time.Now()
 	members := []TeamMemberRecord{
+		{TeamID: "team-product", UserID: "user-admin", TeamRole: "manager", Enabled: true, JoinedAt: now},
 		{TeamID: "team-product", UserID: "user-product-manager", TeamRole: "manager", Enabled: true, JoinedAt: now},
 		{TeamID: "team-product", UserID: "user-product-employee", TeamRole: "employee", Enabled: true, JoinedAt: now},
 		{TeamID: "team-operation", UserID: "user-operation-manager", TeamRole: "manager", Enabled: true, JoinedAt: now},

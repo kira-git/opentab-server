@@ -127,6 +127,7 @@ ON CONFLICT (id) DO UPDATE SET
   updated_at = NOW();
 
 INSERT INTO team_members(team_id, user_id, team_role, enabled, joined_at, created_at, updated_at) VALUES
+  ('team-product', 'user-admin', 'manager', true, '2026-06-01T09:00:00+08:00', NOW(), NOW()),
   ('team-product', 'user-product-manager', 'manager', true, '2026-06-01T09:00:00+08:00', NOW(), NOW()),
   ('team-product', 'user-product-employee', 'employee', true, '2026-06-01T09:00:00+08:00', NOW(), NOW()),
   ('team-operation', 'user-operation-manager', 'manager', true, '2026-06-01T09:00:00+08:00', NOW(), NOW()),

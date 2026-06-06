@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -8,17 +9,30 @@ import (
 	"strings"
 	"time"
 
+	"opentab-server/internal/cache"
 	"opentab-server/internal/models"
 	"opentab-server/internal/repositories"
 	"opentab-server/internal/security"
 )
 
 type AuthService struct {
-	users repositories.UserRepository
+	users          repositories.UserRepository
+	authCache      cache.AuthCache
+	userContextTTL time.Duration
 }
 
 func NewAuthService(users repositories.UserRepository) *AuthService {
-	return &AuthService{users: users}
+	return NewAuthServiceWithCache(users, cache.NewNoopAuthCache(), defaultUserContextCacheTTL)
+}
+
+func NewAuthServiceWithCache(users repositories.UserRepository, authCache cache.AuthCache, userContextTTL time.Duration) *AuthService {
+	if authCache == nil {
+		authCache = cache.NewNoopAuthCache()
+	}
+	if userContextTTL <= 0 {
+		userContextTTL = defaultUserContextCacheTTL
+	}
+	return &AuthService{users: users, authCache: authCache, userContextTTL: userContextTTL}
 }
 
 func (s *AuthService) Login(account string, password string) (*models.LoginResponse, *AppError) {
@@ -42,9 +56,11 @@ func (s *AuthService) Login(account string, password string) (*models.LoginRespo
 	}
 
 	token := newAccessToken()
-	if err := s.users.CreateSession(user.ID, token, tokenExpiresAt()); err != nil {
+	expiresAt := tokenExpiresAt()
+	if err := s.users.CreateSession(user.ID, token, expiresAt); err != nil {
 		return nil, NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "登录失败")
 	}
+	s.cacheSessionAndUser(token, user, expiresAt)
 
 	return &models.LoginResponse{
 		Token:       token,
@@ -95,8 +111,14 @@ func (s *AuthService) Register(req models.RegisterRequest) (*models.LoginRespons
 		return nil, NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "注册失败")
 	}
 	token := newAccessToken()
-	if err := s.users.CreateSession(user.ID, token, tokenExpiresAt()); err != nil {
+	expiresAt := tokenExpiresAt()
+	if err := s.users.CreateSession(user.ID, token, expiresAt); err != nil {
 		return nil, NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "注册失败")
+	}
+	if currentUser, findErr := s.users.FindByID(user.ID); findErr == nil {
+		s.cacheSessionAndUser(token, currentUser, expiresAt)
+	} else {
+		s.cacheSession(token, user.ID, expiresAt)
 	}
 
 	return &models.LoginResponse{
@@ -108,7 +130,32 @@ func (s *AuthService) Register(req models.RegisterRequest) (*models.LoginRespons
 }
 
 func (s *AuthService) FindUserByToken(token string) (*models.User, error) {
-	return s.users.FindByToken(token)
+	ctx := context.Background()
+	session, err := s.authCache.GetSession(ctx, token)
+	if err != nil {
+		repoSession, repoErr := s.users.FindSessionByToken(token)
+		if repoErr != nil {
+			return nil, repoErr
+		}
+		session = &cache.AuthSession{UserID: repoSession.UserID, ExpiresAt: repoSession.ExpiresAt}
+		_ = s.authCache.SetSession(ctx, token, *session, sessionTTL(repoSession.ExpiresAt))
+	}
+	if session.ExpiresAt != nil && session.ExpiresAt.Before(time.Now()) {
+		_ = s.authCache.DeleteSession(ctx, token)
+		return nil, repositories.ErrTokenExpired
+	}
+
+	user, err := s.authCache.GetUserContext(ctx, session.UserID)
+	if err != nil {
+		user, err = s.users.FindByID(session.UserID)
+		if err != nil {
+			return nil, err
+		}
+		_ = s.authCache.SetUserContext(ctx, user.ID, sanitizedUserForCache(*user), s.userContextTTL)
+	}
+	result := *user
+	result.Token = token
+	return &result, nil
 }
 
 func (s *AuthService) GetCurrentUser(user *models.User) models.MeResponse {
@@ -140,7 +187,35 @@ func (s *AuthService) GetCurrentUser(user *models.User) models.MeResponse {
 
 func (s *AuthService) Logout(token string) models.SuccessResponse {
 	_ = s.users.RevokeToken(token)
+	_ = s.authCache.DeleteSession(context.Background(), token)
 	return models.SuccessResponse{Success: true}
+}
+
+func (s *AuthService) cacheSessionAndUser(token string, user *models.User, expiresAt time.Time) {
+	if user == nil {
+		return
+	}
+	s.cacheSession(token, user.ID, expiresAt)
+	ctx := context.Background()
+	_ = s.authCache.SetUserContext(ctx, user.ID, sanitizedUserForCache(*user), s.userContextTTL)
+}
+
+func (s *AuthService) cacheSession(token string, userID string, expiresAt time.Time) {
+	ctx := context.Background()
+	_ = s.authCache.SetSession(ctx, token, cache.AuthSession{UserID: userID, ExpiresAt: &expiresAt}, sessionTTL(&expiresAt))
+}
+
+func sanitizedUserForCache(user models.User) models.User {
+	user.Password = ""
+	user.Token = ""
+	return user
+}
+
+func sessionTTL(expiresAt *time.Time) time.Duration {
+	if expiresAt == nil {
+		return accessTokenTTL
+	}
+	return time.Until(*expiresAt)
 }
 
 func randomHex(byteCount int) string {
@@ -160,6 +235,7 @@ func tokenExpiresAt() time.Time {
 }
 
 const accessTokenTTL = 7 * 24 * time.Hour
+const defaultUserContextCacheTTL = 5 * time.Minute
 
 var defaultRegisterPermissions = []string{
 	"tab.company.read",
